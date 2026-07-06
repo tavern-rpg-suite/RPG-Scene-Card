@@ -2,7 +2,7 @@
 
 A compact **scene card** rendered at the **top of every character message** — the in-world date & weather, the time span of the scene, where you are, one fitting recollection, and the NPCs present — written by a **secondary model** kept separate from your main roleplay model, so it never eats into your story context.
 
-**Version 1.4.1** 
+**Version 1.4.2** 
 
 ---
 
