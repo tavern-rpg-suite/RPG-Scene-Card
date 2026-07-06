@@ -1,0 +1,9 @@
+{
+    "display_name": "RPG Scene Card",
+    "loading_order": 106,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Arkana8",
+    "version": "1.4.2",
+    "homePage": "https://github.com/tavern-rpg-suite/RPG-Scene-Card"
+}

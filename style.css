@@ -1,0 +1,109 @@
+/* ============================================================
+   RPG INFO BOX — top-of-message scene panel
+   ============================================================ */
+.mes .rpgib-box {
+    --ib-accent: var(--SmartThemeQuoteColor, #6ea8ff);
+    --ib-border: color-mix(in srgb, var(--ib-accent) 45%, transparent);
+    --ib-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1f26) 82%, transparent);
+    --ib-text: var(--SmartThemeBodyColor, #e6e6e6);
+    box-sizing: border-box;
+    width: 100%;
+    margin: 2px 0 16px;
+    padding: 12px 16px 14px;
+    border: 1px solid var(--ib-border, rgba(120,160,255,.4));
+    border-radius: 12px;
+    background: var(--ib-bg, rgba(20,24,32,.5));
+    box-shadow: 0 6px 20px -10px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.02) inset;
+    color: var(--ib-text);
+    font-size: 0.94em;
+    line-height: 1.5;
+    animation: rpgib-in .28s ease-out;
+    backdrop-filter: blur(2px);
+}
+@keyframes rpgib-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
+.rpgib-box .rpgib-title {
+    text-align: center;
+    font-weight: 700;
+    font-size: 1.06em;
+    letter-spacing: .3px;
+    color: var(--ib-text);
+    padding: 0 0 8px;
+}
+.rpgib-box .rpgib-divider {
+    height: 1px;
+    margin: 0 0 10px;
+    background: linear-gradient(90deg, transparent, var(--ib-border, rgba(120,160,255,.4)) 20%, var(--ib-border, rgba(120,160,255,.4)) 80%, transparent);
+}
+.rpgib-box .rpgib-rows { display: flex; flex-direction: column; gap: 7px; }
+.rpgib-box .rpgib-row { display: flex; align-items: flex-start; gap: 10px; }
+.rpgib-box .rpgib-emoji {
+    flex: none; width: 1.5em; text-align: center; font-size: 1.05em;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,.4));
+    line-height: 1.5;
+}
+.rpgib-box .rpgib-text { flex: 1; min-width: 0; }
+.rpgib-box .rpgib-char { white-space: normal; }
+.rpgib-box .rpgib-sep { opacity: .4; padding: 0 2px; }
+.rpgib-box .rpgib-muted { opacity: .55; font-style: italic; }
+
+/* level bar */
+.rpgib-box .rpgib-xp { opacity: .7; font-size: .9em; }
+.rpgib-box .rpgib-bar {
+    display: inline-block; vertical-align: middle;
+    width: 96px; height: 7px; margin-left: 8px;
+    border-radius: 5px; overflow: hidden;
+    background: color-mix(in srgb, var(--ib-text) 14%, transparent);
+}
+.rpgib-box .rpgib-bar-fill {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, var(--ib-accent), color-mix(in srgb, var(--ib-accent) 60%, #fff));
+    transition: width .4s ease;
+}
+
+/* loading / error */
+.rpgib-box.rpgib-loading { opacity: .85; }
+.rpgib-box .rpgib-status { display: flex; align-items: center; gap: 8px; opacity: .8; font-style: italic; }
+.rpgib-box.rpgib-error { --ib-border: rgba(230,120,90,.5); }
+.rpgib-box.rpgib-error .rpgib-status { color: #e88; font-style: normal; }
+
+/* settings drawer */
+.rpg-infobox-settings h4 { margin: 6px 0; }
+.rpg-infobox-settings .checkbox_label { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.rpg-infobox-settings textarea.text_pole { font-family: var(--monoFontFamily, monospace); font-size: 0.85em; line-height: 1.45; }
+
+/* --- head + edit button --- */
+.rpgib-box .rpgib-head { position: relative; display: flex; align-items: center; justify-content: center; padding: 0 0 8px; }
+.rpgib-box .rpgib-head .rpgib-title { padding: 0; }
+.rpgib-box .rpgib-tools { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
+.rpgib-box .rpgib-editbtn, .rpgib-box .rpgib-regenbtn {
+    width: 20px; height: 20px; border: none; background: transparent;
+    color: var(--ib-text); opacity: .22; cursor: pointer;
+    display: grid; place-items: center; transition: .15s; font-size: .72em; padding: 0;
+}
+.rpgib-box .rpgib-editbtn:hover, .rpgib-box .rpgib-regenbtn:hover { opacity: .8; }
+
+/* --- edit form --- */
+.rpgib-box .rpgib-editform { display: flex; flex-direction: column; gap: 8px; }
+.rpgib-box .rpgib-f { display: flex; align-items: center; gap: 8px; }
+.rpgib-box .rpgib-f > span { flex: none; min-width: 120px; opacity: .85; font-size: .92em; }
+.rpgib-box .rpgib-f.rpgib-f-col { flex-direction: column; align-items: stretch; gap: 4px; }
+.rpgib-box .rpgib-f.rpgib-f-col > span { min-width: 0; }
+.rpgib-box .rpgib-lvlrow { flex-wrap: wrap; }
+.rpgib-box .rpgib-editform input,
+.rpgib-box .rpgib-editform textarea {
+    flex: 1; min-width: 0; box-sizing: border-box;
+    background: color-mix(in srgb, var(--ib-text) 8%, transparent);
+    border: 1px solid var(--ib-border, rgba(120,160,255,.35));
+    border-radius: 7px; color: var(--ib-text); padding: 6px 9px;
+    font-family: inherit; font-size: .92em;
+}
+.rpgib-box .rpgib-editform textarea { resize: vertical; line-height: 1.4; }
+.rpgib-box .rpgib-editform input:focus,
+.rpgib-box .rpgib-editform textarea:focus { outline: none; border-color: var(--ib-accent); }
+.rpgib-box .rpgib-hint { opacity: .5; font-size: .82em; }
+.rpgib-box .rpgib-edit-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* settings: custom fields rows */
+.rpg-infobox-settings .rpgib-cf-row input[type="checkbox"] { flex: none; }
+.rpg-infobox-settings .rpgib-cf-del { flex: none; }
