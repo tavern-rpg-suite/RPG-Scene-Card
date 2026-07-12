@@ -603,3 +603,44 @@ jQuery(() => {
         });
     } catch (e) { console.error('[RPG Scene Card] Fatal init error:', e); }
 });
+
+/* ============================================================
+   CROSS-EXTENSION BRIDGE — lets the Diary (and others) read the
+   current in-game time / date / weather / location. Read-only,
+   safe no-op for anyone who doesn't use it.
+   ============================================================ */
+function rpgSceneLatestData() {
+    try {
+        const chat = getContext().chat || [];
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const d = chat[i] && chat[i].extra && chat[i].extra.rpg_info_box;
+            if (d && typeof d === 'object') return d;
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+}
+function rpgSceneDayNumber(dateStr) {
+    if (!dateStr) return null;
+    const m = String(dateStr).match(/(\d{1,4})/);
+    return m ? parseInt(m[1]) : null;
+}
+window.RPG = window.RPG || {};
+window.RPG.scene = {
+    available: true,
+    isEnabled: () => !!settings.enabled,
+    get: () => {
+        const d = rpgSceneLatestData();
+        if (!d) return null;
+        const label = [d.date, d.time].filter(Boolean).join(' · ') || d.date || d.time || null;
+        return {
+            label, timeLabel: label,
+            date: d.date || null, time: d.time || null,
+            weather: d.weather || null, location: d.location || null,
+            day: rpgSceneDayNumber(d.date),
+            characters: Array.isArray(d.characters) ? d.characters : [],
+            level: d.level || null,
+            raw: d
+        };
+    },
+    getRaw: () => rpgSceneLatestData()
+};
