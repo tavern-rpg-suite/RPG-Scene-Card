@@ -32,9 +32,3 @@ Copy the `RPG Scene Card` folder into your third-party extensions folder (e.g. `
 ## 🧠 How it works
 
 After each character reply the secondary model reads the last few messages and returns a small structured summary, which is rendered as the box and cached. Because it's a *separate* model, the analysis never competes with your roleplay model's context. With injection on, that same summary is quietly handed to your main model so it keeps the scene's time, place and weather consistent.
-
-## 🩺 Troubleshooting
-
-- **Box is empty or shows an error.** Check the secondary **URL / key / model**; the box needs its own working endpoint.
-- **The date/weather keeps drifting.** Keep the continuity line in the prompt (it tells the model to hold date/weather/location steady) — the reset button restores it.
-- **Nothing reaches my main model.** Turn on injection and set a depth ≥ 0.
