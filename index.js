@@ -40,8 +40,8 @@ const defaultSettings = {
     showTime: true,
     showLocation: true,
     showCharacters: true,
-    showLevel: false,
     customFields: [],   // [{ id, emoji, label, hint, enabled }]
+    examplesSeeded: false,   // the built-in examples are offered once and never again
     prompt: DEFAULT_PROMPT_EN,
 };
 
@@ -91,7 +91,32 @@ function loadSettings() {
     if (!extension_settings[MODULE_NAME]) extension_settings[MODULE_NAME] = {};
     settings = Object.assign({}, defaultSettings, extension_settings[MODULE_NAME]);
     if (!Array.isArray(settings.customFields)) settings.customFields = [];
+    seedExampleFields();
 }
+/* Examples, added once and left switched off. They are there to show what a custom
+   field is for — a good hint is a whole instruction, not a word — and they cost
+   nothing until someone ticks the box. Deleted ones stay deleted: the flag remembers
+   that they were offered, so they never come back. */
+const EXAMPLE_FIELDS = [
+    {
+        id: 'ex_world', emoji: '🌍', label: 'The Living World',
+        hint: "ONE slow-burning, escalating macro-crisis in the wider world (Scandalous Rumors,brewing conflict, political tension, silent threat, murder), and its physical or ambient impact on the surrounding environment/cityscape visible or perceivable from the characters' location (e.g., unusual silences, altered city traffic, distant warning signals, environmental cues). The event must not be connected in any way to what is already happening in the chat. It is a separate MAJOR EVENT that affects the world and the characters around it independently. Very short."
+    },
+    {
+        id: 'ex_level', emoji: '⭐', label: 'Level',
+        hint: "The character's level and progress, as a short line like \"Level 4 — 320/500 XP\". Raise it only after something that earns it: a boss defeated, a long training arc, a decisive victory. Never lower it, never move it every message. Cosmetic — no rules attached."
+    }
+];
+function seedExampleFields() {
+    if (settings.examplesSeeded) return;
+    settings.examplesSeeded = true;
+    EXAMPLE_FIELDS.forEach(e => {
+        if (!settings.customFields.some(f => f.id === e.id)) {
+            settings.customFields.push(Object.assign({ enabled: false }, e));
+        }
+    });
+}
+
 function saveSettings() { extension_settings[MODULE_NAME] = settings; saveSettingsDebounced(); }
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -182,7 +207,6 @@ async function analyseScene(historyText, prevBoxes) {
         { on: settings.showTime, line: '"time": "HH:MM -> HH:MM"' },
         { on: settings.showLocation, line: '"location": "where the scene happens"' },
         { on: settings.showCharacters, line: '"characters": [ { "emoji": "🙂", "name": "Name", "state": "visible physical state", "demeanor": "observable demeanour cue" } ]' },
-        { on: settings.showLevel, line: '"level": { "value": 1, "xp": 0, "max": 100 }' },
     ];
     const parts = [];
     std.forEach(s => { if (!settings.dynamicPrompt || s.on) parts.push(s.line); });
@@ -255,15 +279,12 @@ function boxViewHtml(data) {
             rows.push(rowHtml('👥', parts));
         } else rows.push(rowHtml('👥', '<span class="rpgib-muted">none</span>'));
     }
-    if (settings.showLevel && data.level && typeof data.level === 'object') {
-        const v = data.level.value ?? 1, xp = data.level.xp ?? 0, max = data.level.max ?? 100;
-        const pct = Math.max(0, Math.min(100, max ? (xp / max) * 100 : 0));
-        rows.push(rowHtml('⭐', `<b>${t('lvl')}:</b> ${escapeHtml(v)} <span class="rpgib-xp">[${escapeHtml(xp)}/${escapeHtml(max)}]</span>
-            <span class="rpgib-bar"><span class="rpgib-bar-fill" style="width:${pct}%"></span></span>`));
-    }
     (settings.customFields || []).filter(f => f.enabled && f.id).forEach(f => {
         const val = data.custom ? data.custom[f.id] : '';
-        if (val) rows.push(rowHtml(escapeHtml(f.emoji || '🔹'), `<b>${escapeHtml(f.label || '')}:</b> ${escapeHtml(val)}`));
+        // Rendered like the built-in rows: an emoji and the value. The label is what
+        // the model is told to fill in, not something to read back on the card — the
+        // date row does not say "Date:" either.
+        if (val) rows.push(rowHtml(escapeHtml(f.emoji || '🔹'), escapeHtml(val)));
     });
 
     return `<div class="rpgib-head">
@@ -299,13 +320,6 @@ function boxEditHtml(data) {
         f += `<label class="rpgib-f rpgib-f-col"><span>${t('f_chars')}</span>
             <textarea data-k="characters" rows="3" placeholder="${escapeHtml(t('chars_hint'))}">${escapeHtml(charsToText(data.characters))}</textarea>
             <small class="rpgib-hint">${escapeHtml(t('chars_hint'))}</small></label>`;
-    }
-    if (settings.showLevel) {
-        const lv = data.level || {};
-        f += `<div class="rpgib-f rpgib-lvlrow"><span>${t('f_level')}</span>
-            <input type="number" data-k="lvl_value" value="${escapeHtml(lv.value ?? 1)}" title="${t('lvl_v')}" style="width:60px">
-            <input type="number" data-k="lvl_xp" value="${escapeHtml(lv.xp ?? 0)}" title="${t('lvl_xp')}" style="width:70px">
-            <input type="number" data-k="lvl_max" value="${escapeHtml(lv.max ?? 100)}" title="${t('lvl_max')}" style="width:70px"></div>`;
     }
     (settings.customFields || []).filter(c => c.enabled && c.id).forEach(c => {
         const val = data.custom ? (data.custom[c.id] || '') : '';
@@ -368,7 +382,6 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
             const setv = (k) => { const el = q(k); if (el) d[k] = el.value; };
             ['date', 'weather', 'time', 'location'].forEach(setv);
             if (settings.showCharacters && q('characters')) d.characters = parseChars(q('characters').value);
-            if (settings.showLevel && q('lvl_value')) d.level = { value: Number(q('lvl_value').value) || 0, xp: Number(q('lvl_xp').value) || 0, max: Number(q('lvl_max').value) || 100 };
             (settings.customFields || []).filter(c => c.enabled && c.id).forEach(c => {
                 const el = q('cf_' + c.id); if (el) { d.custom = d.custom || {}; d.custom[c.id] = el.value; }
             });
@@ -512,7 +525,6 @@ function settingsHtml() {
             <label class="checkbox_label"><input type="checkbox" id="rpgib-f-time"> <span data-i18n="f_time"></span></label>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-f-loc"> <span data-i18n="f_loc"></span></label>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-f-chars"> <span data-i18n="f_chars"></span></label>
-            <label class="checkbox_label"><input type="checkbox" id="rpgib-f-level"> <span data-i18n="f_level"></span></label>
             <div class="flex-container alignitemscenter flexgap5 margin-b-10 margin-t-10">
                 <label style="min-width:90px;" data-i18n="titleLbl"></label><input type="text" id="rpgib-title" class="text_pole flex1">
             </div>
@@ -611,7 +623,7 @@ function setupUI() {
 
     const bindField = (id, key) => $(id).prop('checked', settings[key]).on('change', function () { settings[key] = this.checked; saveSettings(); rerenderAll(); });
     bindField('#rpgib-f-date', 'showDate'); bindField('#rpgib-f-time', 'showTime'); bindField('#rpgib-f-loc', 'showLocation');
-    bindField('#rpgib-f-chars', 'showCharacters'); bindField('#rpgib-f-level', 'showLevel');
+    bindField('#rpgib-f-chars', 'showCharacters');
 
     $('#rpgib-title').val(settings.title).on('input', function () { settings.title = $(this).val(); saveSettings(); rerenderAll(); });
     $('#rpgib-dyn').prop('checked', settings.dynamicPrompt).on('change', function () { settings.dynamicPrompt = this.checked; saveSettings(); });
@@ -704,6 +716,9 @@ window.RPG.scene = {
             weather: d.weather || null, location: d.location || null,
             day: rpgSceneDayNumber(d.date),
             characters: Array.isArray(d.characters) ? d.characters : [],
+            // The built-in level UI is gone, but the field stays in the bridge: whatever
+            // reads window.RPG.scene must keep getting the same shape. It is simply null
+            // now unless something else wrote it.
             level: d.level || null,
             raw: d
         };
