@@ -2,11 +2,16 @@
 
 A compact **scene card** rendered at the **top of every character message** — the in-world date & weather, the time span of the scene, where you are, one fitting recollection, and the NPCs present — written by a **secondary model** kept separate from your main roleplay model, so it never eats into your story context.
 
-**Version 1.5.1** 
+**Version 1.5.2** 
 
 ---
 
 ## ✨ Features
+
+<img width="460" height="569" alt="Screenshot_2" src="https://github.com/user-attachments/assets/efc5777e-9b20-4741-b906-85629cf170b0" />
+<img width="676" height="220" alt="Screenshot_3" src="https://github.com/user-attachments/assets/51bddc54-36ff-4a44-a972-d41af0c424b8" />
+
+
 
 - 🗞️ **At-a-glance scene header** on each reply, in a clean paper style.
 - 🧠 **Secondary model** — its own OpenAI-compatible URL / key / model / temperature, independent of your main model.
