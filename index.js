@@ -396,7 +396,22 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
 
     box.innerHTML = boxViewHtml(data || {});
     box.querySelector('.rpgib-editbtn')?.addEventListener('click', () => renderInfoBox(messageId, data, false, false, true));
-    box.querySelector('.rpgib-regenbtn')?.addEventListener('click', () => processMessage(messageId, true));
+    box.querySelector('.rpgib-regenbtn')?.addEventListener('click', async (e) => {
+        // Without this the button looks dead: the request takes seconds and nothing on
+        // screen says so, so it gets pressed again and again.
+        const btn = e.currentTarget;
+        if (btn.classList.contains('rpgib-spinning')) return;   // one at a time
+        btn.classList.add('rpgib-spinning');
+        btn.disabled = true;
+        const card = btn.closest('.rpgib-box');
+        if (card) card.classList.add('rpgib-busy');
+        try { await processMessage(messageId, true); }
+        finally {
+            // The box is redrawn on success, so this button may be gone by now.
+            if (btn.isConnected) { btn.classList.remove('rpgib-spinning'); btn.disabled = false; }
+            if (card && card.isConnected) card.classList.remove('rpgib-busy');
+        }
+    });
 }
 
 /* ===================== PROCESS ===================== */
@@ -471,7 +486,10 @@ function latestBoxText() {
             if (d.date || d.weather) lines.push(`Date: ${[d.date, d.weather].filter(Boolean).join(' | ')}`);
             if (d.time) lines.push(`Time: ${d.time}`);
             if (d.location) lines.push(`Location: ${d.location}`);
-            if (Array.isArray(d.characters) && d.characters.length) lines.push('Present: ' + d.characters.map(c => `${c.name}${c.state ? ' (' + c.state + ')' : ''}`).filter(Boolean).join('; '));
+            // The switch was honoured in the prompt, the card, the form and the save —
+            // everywhere except here, so unticking it stopped the model being ASKED for
+            // characters while old ones kept being sent back to it every turn.
+            if (settings.showCharacters && Array.isArray(d.characters) && d.characters.length) lines.push('Present: ' + d.characters.map(c => `${c.name}${c.state ? ' (' + c.state + ')' : ''}`).filter(Boolean).join('; '));
             if (d.custom) (settings.customFields || []).filter(f => f.enabled && f.id && d.custom[f.id]).forEach(f => lines.push(`${f.label}: ${d.custom[f.id]}`));
             return lines.join('\n');
         }

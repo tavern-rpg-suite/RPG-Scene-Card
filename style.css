@@ -107,3 +107,11 @@
 /* settings: custom fields rows */
 .rpg-infobox-settings .rpgib-cf-row input[type="checkbox"] { flex: none; }
 .rpg-infobox-settings .rpgib-cf-del { flex: none; }
+
+/* ---- regenerating: the button turns while the model is thinking ---- */
+.rpgib-regenbtn.rpgib-spinning i { animation: rpgib-spin 0.9s linear infinite; }
+.rpgib-regenbtn.rpgib-spinning { opacity: .75; cursor: default; }
+@keyframes rpgib-spin { to { transform: rotate(360deg); } }
+
+/* the whole card dims a little, so it is clear the contents are being replaced */
+.rpgib-box.rpgib-busy { opacity: .6; transition: opacity .2s; }
