@@ -35,7 +35,10 @@ const defaultSettings = {
     onlyLast: false,
     language: 'en',
     title: 'Scene Card',
-    dynamicPrompt: false,
+    // No longer a switch in the panel: only the fields you have ticked are ever asked
+    // for. Kept as a setting so the logic below reads the same, and forced on so that
+    // a fresh install behaves like an existing one.
+    dynamicPrompt: true,
     showDate: true,
     showTime: true,
     showLocation: true,
@@ -88,8 +91,11 @@ function t(key) { return (I18N[settings.language] || I18N.en)[key] || I18N.en[ke
 
 /* ===================== SETTINGS IO ===================== */
 function loadSettings() {
+    // an older install may have it saved as false, and there is no longer a way to fix
+    // that by hand
     if (!extension_settings[MODULE_NAME]) extension_settings[MODULE_NAME] = {};
     settings = Object.assign({}, defaultSettings, extension_settings[MODULE_NAME]);
+    settings.dynamicPrompt = true;   // the switch is gone; a stale saved false would be unfixable
     if (!Array.isArray(settings.customFields)) settings.customFields = [];
     seedExampleFields();
 }
@@ -552,7 +558,6 @@ function settingsHtml() {
                 <div class="menu_button menu_button_icon" id="rpgib-add-field" style="margin-top:6px;"><i class="fa-solid fa-plus"></i> <span data-i18n="addField"></span></div>
             </div>
             <hr class="sysHR"><h4>📝 <span data-i18n="promptLbl"></span></h4>
-            <label class="checkbox_label" style="margin-bottom:6px;"><input type="checkbox" id="rpgib-dyn"> <span data-i18n="dynPrompt"></span></label>
             <textarea id="rpgib-prompt" class="text_pole" rows="7" style="width:100%; resize:vertical;"></textarea>
             <div class="menu_button menu_button_icon" id="rpgib-prompt-reset" style="margin-top:6px;"><i class="fa-solid fa-rotate-left"></i> <span data-i18n="promptReset"></span></div>
             <hr class="sysHR">
@@ -601,6 +606,7 @@ function importSettings(file) {
             const obj = JSON.parse(reader.result);
             const key = settings.apiKey;                       // keep local key
             settings = Object.assign({}, defaultSettings, settings, obj);
+            settings.dynamicPrompt = true;
             settings.apiKey = key;
             if (!Array.isArray(settings.customFields)) settings.customFields = [];
             saveSettings();
@@ -644,7 +650,6 @@ function setupUI() {
     bindField('#rpgib-f-chars', 'showCharacters');
 
     $('#rpgib-title').val(settings.title).on('input', function () { settings.title = $(this).val(); saveSettings(); rerenderAll(); });
-    $('#rpgib-dyn').prop('checked', settings.dynamicPrompt).on('change', function () { settings.dynamicPrompt = this.checked; saveSettings(); });
     $('#rpgib-prompt').val(settings.prompt).on('input', function () { settings.prompt = $(this).val(); saveSettings(); });
     $('#rpgib-prompt-reset').on('click', function () { settings.prompt = settings.language === 'ru' ? DEFAULT_PROMPT_RU : DEFAULT_PROMPT_EN; $('#rpgib-prompt').val(settings.prompt); saveSettings(); });
 
