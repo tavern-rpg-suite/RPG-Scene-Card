@@ -147,7 +147,7 @@ function macros(str) {
       forbidding anything but an object, and a model opening with "[" bails out
       with EOS. Local backends do not get it — the reply is parsed leniently anyway.
    ------------------------------------------------------------ */
-const KEY_SOURCES = ['tavern_rpg_engine'];
+const KEY_SOURCES = ['tavern_rpg_engine', 'rpg_status_bar', 'tavern_bonds_engine', 'rpg_phone', 'rpg_diary', 'rpg_map_engine', 'rpg_map', 'rpg_dungeons', 'rpg_codex', 'tavern_doors'];
 function normalizeBase(url) {
     let u = String(url || '').trim().replace(/\s+/g, '');
     if (!u) return u;
@@ -256,9 +256,48 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
             const data = await response.json();
             let content = (data.choices[0].message.content || '').trim();
             const m = content.match(/\{[\s\S]*\}/);
-            return JSON.parse(m ? m[0] : content);
+            return readScene(JSON.parse(m ? m[0] : content), content);
         } catch (e) { if (i === 1) throw e; }
     }
+}
+
+/* Whatever comes back was going straight into the message as-is, so an answer that
+   parsed but was not an object — a bare string, or the JSON encoded a second time —
+   ended up rendered as one run-on blob instead of filling the fields.
+
+   Only shapes that unambiguously mean the same thing are accepted. Anything else is
+   logged raw and refused, because a card built from a misread answer is worse than
+   no card at all. */
+const SCENE_KEYS = ['date', 'weather', 'time', 'location', 'characters', 'custom'];
+
+function readScene(parsed, raw) {
+    let v = parsed;
+
+    // The whole object handed back as a string, sometimes encoded twice. No shape test
+    // here on purpose: checking for braces missed the double-encoded case, where the
+    // outer layer is a quoted string. Anything that stops parsing is left alone and
+    // rejected below.
+    for (let i = 0; i < 3 && typeof v === 'string'; i++) {
+        try { v = JSON.parse(v.trim()); } catch (e) { break; }
+    }
+
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+        console.warn('[RPG Scene Card] answer was not an object:', String(raw).slice(0, 400));
+        throw new Error('The model did not return scene fields.');
+    }
+
+    // { "scene": { ...the real thing... } }
+    const known = (o) => SCENE_KEYS.some(k => k in o);
+    if (!known(v)) {
+        const inner = Object.values(v).find(x => x && typeof x === 'object' && !Array.isArray(x) && known(x));
+        if (inner) v = inner;
+    }
+
+    if (!known(v)) {
+        console.warn('[RPG Scene Card] no scene fields in the answer:', JSON.stringify(v).slice(0, 400));
+        throw new Error('The model did not return scene fields.');
+    }
+    return v;
 }
 
 /* ===================== RENDER (VIEW) ===================== */
