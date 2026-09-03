@@ -4,6 +4,10 @@ A compact **scene card** rendered at the **top of every character message** — 
 
 **Version 1.5.4** 
 
+<p>
+<img width="1672" height="941" alt="0cdd09ca-e799-4a05-bb40-695a7211c79a (1)" src="https://github.com/user-attachments/assets/cb31d7a8-bc83-4985-b82d-c03b8a8157f1" />
+</p>
+
 ---
 
 ## ✨ Features
