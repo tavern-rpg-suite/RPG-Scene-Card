@@ -41,3 +41,8 @@ Copy the `RPG Scene Card` folder into your third-party extensions folder (e.g. `
 ## 🧠 How it works
 
 After each character reply the secondary model reads the last few messages and returns a small structured summary, which is rendered as the box and cached. Because it's a *separate* model, the analysis never competes with your roleplay model's context. With injection on, that same summary is quietly handed to your main model so it keeps the scene's time, place and weather consistent.
+
+---
+## ✨ Screenshots
+
+<img width="1901" height="867" alt="Preview-RPG Scene Card" src="https://github.com/user-attachments/assets/80560cb4-b5ed-411e-a233-a167674bde63" />
