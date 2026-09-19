@@ -60,6 +60,11 @@ const I18N = {
         f_chars: '👥 Present characters', f_level: '⭐ Level',
         titleLbl: 'Box title:', promptLbl: 'Analysis prompt (editable):', promptReset: 'Reset prompt to default',
         lang: 'Language:', analysing: 'Analysing scene…', err: 'Scene Card error', lvl: 'Level',
+        e_key: 'No API key — set one in the extension settings.',
+        e_net: 'The browser blocked the request before it reached the provider: a region block (try a VPN), an ad blocker on this tab, an http:// address on an https:// page, or a provider that refuses browser calls.',
+        e_auth: 'The provider rejected the key (401/403) — check the key and its credit.',
+        e_rate: 'Rate limited (429) — wait a moment and try again.',
+        e_404: 'Endpoint not found (404) — check the API URL, it usually ends in /v1.',
         dynPrompt: 'Dynamic prompt (only generate shown fields)',
         onlyLast: 'Show only on the latest message', regen_lbl: 'Regenerate', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
         customTitle: 'Custom fields', addField: 'Add field',
@@ -78,6 +83,11 @@ const I18N = {
         f_chars: '👥 Присутствующие', f_level: '⭐ Уровень',
         titleLbl: 'Заголовок блока:', promptLbl: 'Промпт анализа (редактируемый):', promptReset: 'Сбросить промпт',
         lang: 'Язык:', analysing: 'Анализ сцены…', err: 'Ошибка Scene Card', lvl: 'Уровень',
+        e_key: 'Не задан ключ API — впиши его в настройках расширения.',
+        e_net: 'Браузер заблокировал запрос до того, как он дошёл до провайдера: блокировка по региону (попробуй VPN), блокировщик рекламы на этой вкладке, адрес http:// на странице https:// или провайдер, который не принимает запросы из браузера.',
+        e_auth: 'Провайдер отклонил ключ (401/403) — проверь ключ и баланс.',
+        e_rate: 'Слишком много запросов (429) — подожди немного.',
+        e_404: 'Адрес не найден (404) — проверь URL API, обычно он кончается на /v1.',
         dynPrompt: 'Динамичный промпт (генерировать только показанные поля)',
         onlyLast: 'Показывать только на последнем сообщении', regen_lbl: 'Перегенерировать', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
         customTitle: 'Свои поля', addField: 'Добавить поле',
@@ -195,6 +205,17 @@ function apiConf() {
     const b = borrowedRaw();
     return b.key ? b : { url: '', key: ownKey, model: ownModel, from: null };
 }
+/* "NetworkError when attempting to fetch resource" tells a user nothing. These
+   name the handful of things it can actually be. */
+function explainError(e) {
+    const m = String(e?.message || e || '');
+    if (/Failed to fetch|NetworkError|Load failed|ERR_/i.test(m)) return t('e_net');
+    if (/HTTP 401|HTTP 403/.test(m)) return t('e_auth');
+    if (/HTTP 429/.test(m)) return t('e_rate');
+    if (/HTTP 404/.test(m)) return t('e_404');
+    if (/API key is not set/i.test(m)) return t('e_key');
+    return m;
+}
 function apiKey() { return apiConf().key || ''; }
 function apiUrl() { return normalizeBase(apiConf().url) || 'https://openrouter.ai/api/v1'; }
 function apiModel() { return apiConf().model || ''; }
@@ -236,6 +257,9 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
     const systemPrompt = macros(settings.prompt || DEFAULT_PROMPT_EN) + formatSpec;
     const endpointUrl = apiUrl() + '/chat/completions';
 
+    // Attempt 2 used to send a byte-identical request, so a refusal caused by the
+    // strict-JSON flag repeated itself. It now retries without the flag instead.
+    let strict = wantsStrictJson(endpointUrl);
     for (let i = 0; i < 2; i++) {
         try {
             const response = await fetch(endpointUrl, {
@@ -248,13 +272,22 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
                         { role: 'user', content: `${hasPrev ? 'Previous Scene Card' + (prevArr.length > 1 ? 's (oldest to newest, continue from the newest)' : ' (continue from this)') + ':\n' + prevArr.map(b => JSON.stringify(b)).join('\n') + '\n\n' : ''}Recent scene:\n${historyText}\n\nOutput JSON:` }
                     ],
                     temperature: settings.temperature,
-                    ...(wantsStrictJson(endpointUrl) ? { response_format: { type: 'json_object' } } : {})
+                    ...(strict ? { response_format: { type: 'json_object' } } : {})
                 })
             });
             if (response.status === 429 && i === 0) { await new Promise(r => setTimeout(r, 2000)); continue; }
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (!response.ok) {
+                if (i === 0 && strict && [400, 404, 422].includes(response.status)) { strict = false; continue; }
+                let detail = '';
+                try { detail = (await response.json())?.error?.message || ''; } catch (e2) { /* not JSON */ }
+                throw new Error(`HTTP ${response.status}${detail ? ' — ' + detail : ''}`);
+            }
             const data = await response.json();
-            let content = (data.choices[0].message.content || '').trim();
+            // A provider that answers with an error object instead of choices used to
+            // crash here with an unreadable TypeError.
+            const msg = data?.choices?.[0]?.message;
+            if (!msg) throw new Error(data?.error?.message || 'The provider returned no answer.');
+            let content = (msg.content || '').trim();
             const m = content.match(/\{[\s\S]*\}/);
             return readScene(JSON.parse(m ? m[0] : content), content);
         } catch (e) { if (i === 1) throw e; }
@@ -414,7 +447,7 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
         box.className = 'rpgib-box rpgib-error';
         box.innerHTML = `<div class="rpgib-head"><span class="rpgib-title">${escapeHtml(settings.title || 'Scene Card')}</span></div>
             <div class="rpgib-divider"></div>
-            <div class="rpgib-status">⚠️ ${escapeHtml(t('err'))}: ${escapeHtml(data)}</div>`;
+            <div class="rpgib-status">⚠️ ${escapeHtml(t('err'))}: ${escapeHtml(explainError(data))}</div>`;
         return;
     }
 
