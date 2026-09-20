@@ -1,5 +1,6 @@
 import { getContext, extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, setExtensionPrompt, extension_prompt_roles } from '../../../../script.js';
+import { applyWeather, clearWeather } from './weather.js';
 
 const MODULE_NAME = 'rpg_info_box';
 const PROMPT_KEY = 'rpg_info_box_injection';
@@ -46,6 +47,12 @@ const defaultSettings = {
     customFields: [],   // [{ id, emoji, label, hint, enabled }]
     examplesSeeded: false,   // the built-in examples are offered once and never again
     prompt: DEFAULT_PROMPT_EN,
+    // Atmosphere driven by the card's own weather / time / location fields.
+    wxEnabled: false,
+    wxStrength: 60,
+    wxMotion: true,
+    wxThemes: true,
+    wxIndoor: 'auto',      // auto | outdoor | indoor
 };
 
 /* ===================== i18n ===================== */
@@ -53,6 +60,10 @@ const I18N = {
     en: {
         drawer: 'RPG Scene Card (top of message)', enable: 'Enable Scene Card',
         api: 'API Settings (secondary model)', url: 'URL', key: 'API Key', model: 'Model', temp: 'Temperature:',
+        wx: 'Weather & atmosphere', wxOn: 'Show weather over the chat',
+        wxHint: 'Driven by the card itself: the weather line, the time of day and the location. Rain, snow, storms, fog, the colour of the light, dust in a sunbeam, embers by a hearth.',
+        wxStrength: 'Strength', wxIndoor: 'Indoors', wxAuto: 'Follow the location', wxOut: 'Always outdoors', wxIn: 'Always indoors',
+        wxThemes: 'Tint by place (castle, tavern, clinic, forest, sea)', wxMotion: 'Animate',
         gen: 'Generation & Context', scan: 'Messages to analyse:', msgs: 'messages', statsScan: 'Previous Scene Cards to consider:', boxes: 'boxes',
         inject: 'Add Scene Card to the main model (inject)', depth: 'Injection depth:',
         fields: 'Fields to display',
@@ -76,6 +87,10 @@ const I18N = {
     ru: {
         drawer: 'RPG Scene Card (сверху сообщения)', enable: 'Включить Scene Card',
         api: 'Настройки API (вторая модель)', url: 'URL', key: 'API-ключ', model: 'Модель', temp: 'Температура:',
+        wx: 'Погода и атмосфера', wxOn: 'Показывать погоду поверх чата',
+        wxHint: 'Берётся из самой карточки: строка погоды, время суток и место. Дождь, снег, гроза, туман, цвет света, пылинки в луче, угли у камина.',
+        wxStrength: 'Сила', wxIndoor: 'В помещении', wxAuto: 'По месту сцены', wxOut: 'Всегда на улице', wxIn: 'Всегда внутри',
+        wxThemes: 'Подкрашивать по месту (замок, таверна, клиника, лес, море)', wxMotion: 'Анимировать',
         gen: 'Генерация и контекст', scan: 'Сообщений для анализа:', msgs: 'сообщений', statsScan: 'Предыдущих Scene Card учитывать:', boxes: 'боксов',
         inject: 'Добавлять Scene Card в основную модель (инъекция)', depth: 'Глубина вставки:',
         fields: 'Какие поля показывать',
@@ -548,6 +563,7 @@ async function processMessage(messageId, forceUpdate = false) {
         saveChatDebounced();
         renderInfoBox(messageId, data);
         updateContextInjection();
+        syncWeather();
     } catch (e) {
         console.error('[RPG Scene Card] failed:', e);
         renderInfoBox(messageId, e.message, false, true);
@@ -616,6 +632,24 @@ function settingsHtml() {
                 <label data-i18n="depth"></label><input type="number" id="rpgib-inject-depth" class="text_pole" min="0" max="100" style="width:55px;">
             </div>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-only-last"> <span data-i18n="onlyLast"></span></label>
+            <hr class="sysHR"><h4>🌦️ <span data-i18n="wx"></span></h4>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-wx"> <b data-i18n="wxOn"></b></label>
+            <div class="rpgib-hint" data-i18n="wxHint"></div>
+            <div class="flex-container alignitemscenter flexgap5 margin-b-10 margin-t-10">
+                <label style="min-width:90px;" data-i18n="wxStrength"></label>
+                <input type="range" id="rpgib-wx-strength" min="10" max="120" step="5" class="flex1">
+                <span id="rpgib-wx-strength-val" style="min-width:32px;"></span>
+            </div>
+            <div class="flex-container alignitemscenter flexgap5 margin-b-10">
+                <label style="min-width:90px;" data-i18n="wxIndoor"></label>
+                <select id="rpgib-wx-indoor" class="text_pole">
+                    <option value="auto" data-i18n="wxAuto"></option>
+                    <option value="outdoor" data-i18n="wxOut"></option>
+                    <option value="indoor" data-i18n="wxIn"></option>
+                </select>
+            </div>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-wx-themes"> <span data-i18n="wxThemes"></span></label>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-wx-motion"> <span data-i18n="wxMotion"></span></label>
             <hr class="sysHR"><h4>🧩 <span data-i18n="fields"></span></h4>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-f-date"> <span data-i18n="f_date"></span></label>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-f-time"> <span data-i18n="f_time"></span></label>
@@ -702,6 +736,18 @@ function setupUI() {
     root.find('.rpgib-drawer-toggle').on('click', function () { $('#rpgib-drawer-content').slideToggle(150); $(this).find('.inline-drawer-icon').toggleClass('down up'); });
 
     $('#rpgib-enabled').prop('checked', settings.enabled).on('change', function () { settings.enabled = this.checked; saveSettings(); updateContextInjection(); });
+    const wxSync = () => syncWeather();
+    $('#rpgib-wx').prop('checked', settings.wxEnabled).on('change', function () { settings.wxEnabled = this.checked; saveSettings(); wxSync(); });
+    $('#rpgib-wx-strength').val(settings.wxStrength).on('input', function () {
+        settings.wxStrength = parseInt(this.value, 10) || 60;
+        $('#rpgib-wx-strength-val').text(settings.wxStrength);
+        saveSettings(); wxSync();
+    });
+    $('#rpgib-wx-strength-val').text(settings.wxStrength);
+    $('#rpgib-wx-indoor').val(settings.wxIndoor).on('change', function () { settings.wxIndoor = this.value; saveSettings(); wxSync(); });
+    $('#rpgib-wx-themes').prop('checked', settings.wxThemes).on('change', function () { settings.wxThemes = this.checked; saveSettings(); wxSync(); });
+    $('#rpgib-wx-motion').prop('checked', settings.wxMotion).on('change', function () { settings.wxMotion = this.checked; saveSettings(); wxSync(); });
+
     $('#rpgib-lang').val(settings.language).on('change', function () { settings.language = this.value; saveSettings(); applyI18n(root); renderCustomList(); $('#rpgib-temp-val').text(settings.temperature); rerenderAll(); });
     $('#rpgib-base-url').val(settings.baseUrl).on('input', function () { settings.baseUrl = $(this).val(); saveSettings(); });
     $('#rpgib-api-key').val(settings.apiKey).on('input', function () { settings.apiKey = $(this).val(); saveSettings(); });
@@ -754,13 +800,15 @@ jQuery(() => {
         setupUI();
         updateContextInjection();
 
-        eventSource.on(event_types.CHAT_CHANGED, () => { rerenderAll(); updateContextInjection(); });
+        eventSource.on(event_types.CHAT_CHANGED, () => { rerenderAll(); updateContextInjection(); syncWeather(); });
+        syncWeather();
         const reRender = (messageId) => {
             if (!settings.enabled) return;
             const msg = getContext().chat[messageId];
             if (!(msg && !msg.is_user && !msg.is_system)) return;
             if (settings.onlyLast && messageId !== latestBotIndex()) { removeBox(messageId); return; }
             if (msg.extra?.rpg_info_box) renderInfoBox(messageId, msg.extra.rpg_info_box);
+            syncWeather();
         };
         eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, reRender);
         eventSource.on(event_types.MESSAGE_EDITED, reRender);
@@ -782,6 +830,20 @@ jQuery(() => {
    current in-game time / date / weather / location. Read-only,
    safe no-op for anyone who doesn't use it.
    ============================================================ */
+/** Repaint the atmosphere from the newest card in this chat. */
+function syncWeather() {
+    try {
+        if (!settings.enabled || !settings.wxEnabled) { clearWeather(); return; }
+        applyWeather(rpgSceneLatestData(), {
+            enabled: true,
+            strength: settings.wxStrength,
+            motion: settings.wxMotion,
+            themes: settings.wxThemes,
+            indoorMode: settings.wxIndoor,
+        });
+    } catch (e) { console.warn('[RPG Scene Card] weather failed', e); }
+}
+
 function rpgSceneLatestData() {
     try {
         const chat = getContext().chat || [];
