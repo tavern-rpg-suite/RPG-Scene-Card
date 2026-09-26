@@ -1,6 +1,7 @@
 import { getContext, extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, setExtensionPrompt, extension_prompt_roles } from '../../../../script.js';
 import { applyWeather, clearWeather } from './weather.js';
+import { weatherText, geocode, placeLabel, getWeather, getWeatherAt, cachedWeather, nowParts, formatGap, localDayNumber } from './realtime.js';
 
 const MODULE_NAME = 'rpg_info_box';
 const PROMPT_KEY = 'rpg_info_box_injection';
@@ -53,6 +54,12 @@ const defaultSettings = {
     wxMotion: true,
     wxThemes: true,
     wxIndoor: 'auto',      // auto | outdoor | indoor
+    // Second mode: the real date, time and weather instead of an in-world one.
+    clockMode: 'story',    // story | real
+    realPlace: null,       // { name, admin, country, lat, lon, tz }
+    realWeather: true,
+    realUnits: 'metric',   // metric | imperial
+    realGap: true,         // tell the character how long the pause before her message was
 };
 
 /* ===================== i18n ===================== */
@@ -83,6 +90,15 @@ const I18N = {
         edit_lbl: 'Edit', save_lbl: 'Save', cancel_lbl: 'Cancel',
         chars_hint: 'One per line: emoji | name | state | demeanour',
         lvl_v: 'Level', lvl_xp: 'XP', lvl_max: 'Max',
+        clk: 'Time mode', clkStory: 'In-world (roleplay): the model keeps the story\'s date', clkReal: 'Real (companion): this device\'s date and time, real weather',
+        clkHint: 'Real mode takes the date and time from this phone or computer and the weather for your city. The model is no longer asked for them — it still fills location, characters and your own fields, if they are on. With no API key the card shows just the real date, time and weather.',
+        place: 'City for the weather', placeFind: 'Find', placeGeo: 'Use this device\'s location', placeNone: 'No city chosen yet', placeNothing: 'Nothing found',
+        placeGeoFail: 'The device did not share its location. Type the city instead.',
+        realWx: 'Real weather', units: 'Units', unitsMetric: '°C, m/s', unitsImperial: '°F, mph',
+        realGap: 'Tell the character how long the pause before your message was',
+        preview: 'What the character is given now', previewBtn: 'Refresh', attribution: 'Weather data: Open-Meteo.com (CC BY 4.0)',
+        r_now: 'Now for {user} (real time)', r_wx: 'Weather', r_gap: 'Pause in the conversation before {user}\'s last message',
+        r_loc: 'Location', r_present: 'Present',
     },
     ru: {
         drawer: 'RPG Scene Card (сверху сообщения)', enable: 'Включить Scene Card',
@@ -110,6 +126,15 @@ const I18N = {
         edit_lbl: 'Изменить', save_lbl: 'Сохранить', cancel_lbl: 'Отмена',
         chars_hint: 'По одному в строке: эмодзи | имя | состояние | манера',
         lvl_v: 'Уровень', lvl_xp: 'Опыт', lvl_max: 'Макс',
+        clk: 'Режим времени', clkStory: 'Внутриигровое (ролевая): дату истории ведёт модель', clkReal: 'Реальное (компаньон): дата и время с устройства, настоящая погода',
+        clkHint: 'Реальный режим берёт дату и время с этого телефона или компьютера, а погоду — для твоего города. Модель их больше не придумывает — она по-прежнему заполняет место, персонажей и твои поля, если они включены. Без API-ключа карточка показывает только настоящие дату, время и погоду.',
+        place: 'Город для погоды', placeFind: 'Найти', placeGeo: 'Определить по устройству', placeNone: 'Город ещё не выбран', placeNothing: 'Ничего не найдено',
+        placeGeoFail: 'Устройство не дало своё местоположение. Впиши город.',
+        realWx: 'Настоящая погода', units: 'Единицы', unitsMetric: '°C, м/с', unitsImperial: '°F, миль/ч',
+        realGap: 'Говорить персонажу, сколько длилась пауза перед твоим сообщением',
+        preview: 'Что персонаж получает сейчас', previewBtn: 'Обновить', attribution: 'Данные о погоде: Open-Meteo.com (CC BY 4.0)',
+        r_now: 'Сейчас у {user} (реальное время)', r_wx: 'Погода', r_gap: 'Пауза в переписке перед последним сообщением {user}',
+        r_loc: 'Место', r_present: 'Рядом',
     }
 };
 function t(key) { return (I18N[settings.language] || I18N.en)[key] || I18N.en[key] || key; }
@@ -157,6 +182,55 @@ function macros(str) {
     return String(str || '')
         .replace(/\{\{user\}\}|\{\{user_name\}\}/g, ctx.name1 || 'User')
         .replace(/\{\{char\}\}/g, ctx.name2 || 'Character');
+}
+
+/* ===================== REAL TIME MODE ===================== */
+function isReal() { return settings.clockMode === 'real'; }
+function tr(key) { return t(key).replace(/\{user\}/g, getContext().name1 || 'User'); }
+/** Real weather line, or '' — from cache only unless asked to fetch. */
+async function realWeatherLine(fetchIt) {
+    if (!settings.realWeather || !settings.realPlace) return '';
+    const w = fetchIt ? await getWeather(settings.realPlace, settings.realUnits) : cachedWeather(settings.realPlace, settings.realUnits);
+    return w ? weatherText(w, settings.language, settings.realUnits) : '';
+}
+/** A message's own timestamp, whatever shape the tavern stored it in. */
+function messageTime(m) {
+    if (!m) return null;
+    const v = m.send_date;
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return v;
+    try {
+        const ctx = getContext();
+        if (typeof ctx.timestampToMoment === 'function') {
+            const mo = ctx.timestampToMoment(v);
+            const ms = mo && typeof mo.valueOf === 'function' ? mo.valueOf() : NaN;
+            if (Number.isFinite(ms)) return ms;
+        }
+    } catch (e) { /* fall through */ }
+    const p = Date.parse(v);
+    return Number.isFinite(p) ? p : null;
+}
+/** How long the chat was silent before her latest message — only if it was a real pause. */
+function pauseBeforeLastUserMessage() {
+    const chat = getContext().chat || [];
+    let u = -1;
+    for (let i = chat.length - 1; i >= 0; i--) { if (chat[i] && chat[i].is_user) { u = i; break; } }
+    if (u <= 0) return null;
+    let prev = null;
+    for (let i = u - 1; i >= 0; i--) { if (chat[i] && !chat[i].is_system) { prev = chat[i]; break; } }
+    const a = messageTime(prev), b = messageTime(chat[u]);
+    if (a == null || b == null) return null;
+    const gap = b - a;
+    return gap >= 30 * 60 * 1000 ? gap : null;
+}
+/** The card's fields for right now, from the device and the weather service. */
+async function realFields(fetchWeatherNow) {
+    const n = nowParts(settings.language);
+    return { date: n.date, time: n.time, weather: await realWeatherLine(fetchWeatherNow), real: true, day: n.day };
+}
+function needsModel() {
+    const custom = (settings.customFields || []).some(f => f.enabled && f.id);
+    return !!(settings.showLocation || settings.showCharacters || custom);
 }
 
 /* ===================== AI CALL ===================== */
@@ -244,14 +318,17 @@ async function analyseScene(historyText, prevBoxes) {
     const user = ctx.name1 || 'User';
     const langLine = settings.language === 'ru' ? 'Пиши ВСЕ значения на русском языке.' : 'Write ALL values in English.';
 
+    // In real mode the date, the time and the weather come from the device and the
+    // weather service, so the model is not asked to make them up.
+    const real = isReal();
     const std = [
-        { on: settings.showDate, line: '"date": "Weekday, Month Day, Year", "weather": "emoji + short forecast + temperature"' },
-        { on: settings.showTime, line: '"time": "HH:MM -> HH:MM"' },
+        { on: settings.showDate && !real, line: '"date": "Weekday, Month Day, Year", "weather": "emoji + short forecast + temperature"' },
+        { on: settings.showTime && !real, line: '"time": "HH:MM -> HH:MM"' },
         { on: settings.showLocation, line: '"location": "where the scene happens"' },
         { on: settings.showCharacters, line: '"characters": [ { "emoji": "🙂", "name": "Name", "state": "visible physical state", "demeanor": "observable demeanour cue" } ]' },
     ];
     const parts = [];
-    std.forEach(s => { if (!settings.dynamicPrompt || s.on) parts.push(s.line); });
+    std.forEach(s => { if ((!settings.dynamicPrompt && !real) || s.on) parts.push(s.line); });
 
     const customOn = (settings.customFields || []).filter(f => f.enabled && f.id);
     if (customOn.length) {
@@ -265,7 +342,9 @@ async function analyseScene(historyText, prevBoxes) {
 {
  ${parts.join(',\n ')}
 }
-The protagonist is "${user}". Do NOT list "${user}" inside "characters". ${langLine}${hasPrev ? `
+The protagonist is "${user}". Do NOT list "${user}" inside "characters". ${langLine}${hasPrev && real ? `
+
+CONTINUITY: a previous Scene Card is provided below. Keep "location" the same unless the recent messages clearly move somewhere else.` : ''}${hasPrev && !real ? `
 
 CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (INCLUDING the year), "weather" and "location" IDENTICAL to the previous one UNLESS the recent messages clearly show a change (a new day passes, travel to another place, the weather explicitly shifts). Normally ONLY "time" moves forward by a little. NEVER invent a new year and do NOT relocate or change the weather without a clear narrative reason.` : ''}`;
 
@@ -557,7 +636,34 @@ async function processMessage(messageId, forceUpdate = false) {
         const slice = chat.slice(startIdx, messageId + 1).filter(m => !m.is_system);
         const historyText = slice.map(m => `${m.name}: ${m.mes}`).join('\n\n');
 
-        const data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount));
+        let data;
+        if (isReal()) {
+            // The model only fills what the device cannot know, and only if it can be asked.
+            const r = await realFields(true);
+            let fromModel = {};
+            if (needsModel() && apiKey()) {
+                try { fromModel = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount)) || {}; }
+                catch (e) { console.warn('[RPG Scene Card] real mode: model fields skipped —', e); fromModel = { _err: explainError(e) }; }
+            }
+            data = Object.assign({}, fromModel, r);
+            /* The card is a snapshot of the moment the message was written. A new
+               message is written now; an old one — regenerated, or swiped — keeps
+               its own date and time, and gets the weather as it was THEN, not
+               today's sky under a date two weeks ago. */
+            const own = messageTime(msg);
+            if (own && Math.abs(Date.now() - own) >= 60 * 60 * 1000) {
+                const n = nowParts(settings.language, new Date(own));
+                data.date = n.date; data.time = n.time; data.day = n.day;
+                data.weather = '';
+                if (settings.realWeather && settings.realPlace) {
+                    const past = await getWeatherAt(settings.realPlace, settings.realUnits, own);
+                    if (past) data.weather = weatherText(past, settings.language, settings.realUnits);
+                }
+            }
+            delete data._err;
+        } else {
+            data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount));
+        }
         if (!msg.extra) msg.extra = {};
         msg.extra.rpg_info_box = data;
         saveChatDebounced();
@@ -590,9 +696,30 @@ function latestBoxText() {
     }
     return '';
 }
+/* Real mode: what the character is told is about NOW, not about when the last card
+   was drawn — she may write the next morning. Location and the people present still
+   come from the newest card, if the model filled them. */
+function realInjectionText() {
+    const lines = [];
+    const n = nowParts(settings.language);
+    lines.push(`${tr('r_now')}: ${n.date}, ${n.time}.`);
+    const w = settings.realWeather && settings.realPlace ? cachedWeather(settings.realPlace, settings.realUnits) : null;
+    if (w) lines.push(`${t('r_wx')}${settings.language === 'ru' ? ' — ' : ' in '}${settings.realPlace.name}: ${weatherText(w, settings.language, settings.realUnits)}.`);
+    if (settings.realGap) {
+        const gap = pauseBeforeLastUserMessage();
+        if (gap) lines.push(`${tr('r_gap')}: ${formatGap(gap, settings.language)}.`);
+    }
+    const d = rpgSceneLatestData();
+    if (d) {
+        if (settings.showLocation && d.location) lines.push(`${t('r_loc')}: ${d.location}`);
+        if (settings.showCharacters && Array.isArray(d.characters) && d.characters.length) lines.push(`${t('r_present')}: ` + d.characters.map(c => `${c.name}${c.state ? ' (' + c.state + ')' : ''}`).filter(Boolean).join('; '));
+        if (d.custom) (settings.customFields || []).filter(f => f.enabled && f.id && d.custom[f.id]).forEach(f => lines.push(`${f.label}: ${d.custom[f.id]}`));
+    }
+    return lines.join('\n');
+}
 function updateContextInjection() {
     if (!settings.enabled || !settings.injectContext) { setExtensionPrompt(PROMPT_KEY, '', 0, 0, false); return; }
-    const txt = latestBoxText();
+    const txt = isReal() ? realInjectionText() : latestBoxText();
     setExtensionPrompt(PROMPT_KEY, txt ? `\n[Scene Card]\n${txt}\n` : '', 2, settings.injectDepth, false, extension_prompt_roles.SYSTEM);
 }
 
@@ -610,6 +737,35 @@ function settingsHtml() {
             <div class="flex-container alignitemscenter flexgap5 margin-t-10 margin-b-10">
                 <label style="min-width:80px;" data-i18n="lang"></label>
                 <select id="rpgib-lang" class="text_pole"><option value="en">English</option><option value="ru">Русский</option></select>
+            </div>
+            <hr class="sysHR"><h4>🕰️ <span data-i18n="clk"></span></h4>
+            <select id="rpgib-clock" class="text_pole" style="width:100%;">
+                <option value="story" data-i18n="clkStory"></option>
+                <option value="real" data-i18n="clkReal"></option>
+            </select>
+            <div class="rpgib-real-block" id="rpgib-real-block">
+                <div class="rpgib-hint" data-i18n="clkHint"></div>
+                <label style="display:block; margin-top:8px;" data-i18n="place"></label>
+                <div class="flex-container alignitemscenter flexgap5 margin-b-10">
+                    <input type="text" id="rpgib-place-q" class="text_pole flex1">
+                    <div class="menu_button" id="rpgib-place-find" data-i18n="placeFind"></div>
+                </div>
+                <select id="rpgib-place-list" class="text_pole" style="width:100%; display:none;"></select>
+                <div class="menu_button menu_button_icon" id="rpgib-place-geo" style="margin-top:6px;"><i class="fa-solid fa-location-crosshairs"></i> <span data-i18n="placeGeo"></span></div>
+                <div class="rpgib-hint" id="rpgib-place-now"></div>
+                <label class="checkbox_label"><input type="checkbox" id="rpgib-real-wx"> <span data-i18n="realWx"></span></label>
+                <div class="flex-container alignitemscenter flexgap5 margin-b-10">
+                    <label style="min-width:90px;" data-i18n="units"></label>
+                    <select id="rpgib-real-units" class="text_pole">
+                        <option value="metric" data-i18n="unitsMetric"></option>
+                        <option value="imperial" data-i18n="unitsImperial"></option>
+                    </select>
+                </div>
+                <label class="checkbox_label"><input type="checkbox" id="rpgib-real-gap"> <span data-i18n="realGap"></span></label>
+                <label style="display:block; margin-top:8px;"><b data-i18n="preview"></b></label>
+                <pre id="rpgib-real-preview" class="rpgib-preview"></pre>
+                <div class="menu_button menu_button_icon" id="rpgib-real-refresh"><i class="fa-solid fa-rotate"></i> <span data-i18n="previewBtn"></span></div>
+                <div class="rpgib-hint" data-i18n="attribution"></div>
             </div>
             <hr class="sysHR"><h4>🔌 <span data-i18n="api"></span></h4>
             <div class="flex-container alignitemscenter flexgap5 margin-b-10"><input type="text" id="rpgib-base-url" class="text_pole flex1" data-i18n-ph="url"></div>
@@ -776,8 +932,62 @@ function setupUI() {
         saveSettings(); renderCustomList();
     });
 
+    setupRealUI(root);
     renderCustomList();
     applyI18n(root);
+}
+function showPlace() {
+    $('#rpgib-place-now').text(settings.realPlace ? '📍 ' + placeLabel(settings.realPlace) : t('placeNone'));
+}
+async function refreshRealPreview(fetchIt) {
+    if (!isReal()) return;
+    if (fetchIt && settings.realWeather && settings.realPlace) { try { await getWeather(settings.realPlace, settings.realUnits, true); } catch (e) { } }
+    $('#rpgib-real-preview').text(realInjectionText());
+    updateContextInjection();
+    syncWeather();
+}
+function setupRealUI(root) {
+    const block = () => $('#rpgib-real-block').toggle(isReal());
+    $('#rpgib-clock').val(settings.clockMode || 'story').on('change', function () {
+        settings.clockMode = this.value; saveSettings(); block();
+        updateContextInjection(); syncWeather(); refreshRealPreview(true);
+    });
+    block();
+    showPlace();
+    let found = [];
+    const pick = (c) => {
+        settings.realPlace = c; saveSettings(); showPlace();
+        $('#rpgib-place-list').hide();
+        refreshRealPreview(true);
+    };
+    const find = async () => {
+        const q = String($('#rpgib-place-q').val() || '').trim();
+        if (!q) return;
+        let list = [];
+        try { list = await geocode(q, settings.language); } catch (e) { console.warn('[RPG Scene Card] city search failed', e); }
+        found = list;
+        const sel = $('#rpgib-place-list');
+        if (!list.length) { sel.hide(); $('#rpgib-place-now').text(t('placeNothing')); return; }
+        if (list.length === 1) { pick(list[0]); return; }
+        sel.empty().append(list.map((c, i) => $('<option>').val(i).text(placeLabel(c)))).show();
+        pick(list[0]);   // the best match right away; the list lets her choose another
+    };
+    $('#rpgib-place-find').on('click', find);
+    $('#rpgib-place-q').on('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); find(); } });
+    $('#rpgib-place-list').on('change', function () { const c = found[Number(this.value)]; if (c) pick(c); });
+    $('#rpgib-place-geo').on('click', () => {
+        if (!navigator.geolocation) { $('#rpgib-place-now').text(t('placeGeoFail')); return; }
+        navigator.geolocation.getCurrentPosition(
+            (pos) => pick({ name: settings.language === 'ru' ? 'твоё место' : 'your location', admin: '', country: '', lat: pos.coords.latitude, lon: pos.coords.longitude, tz: '' }),
+            () => $('#rpgib-place-now').text(t('placeGeoFail')),
+            { timeout: 10000, maximumAge: 3600 * 1000 },
+        );
+    });
+    $('#rpgib-real-wx').prop('checked', settings.realWeather).on('change', function () { settings.realWeather = this.checked; saveSettings(); refreshRealPreview(true); });
+    $('#rpgib-real-units').val(settings.realUnits || 'metric').on('change', function () { settings.realUnits = this.value; saveSettings(); refreshRealPreview(true); });
+    $('#rpgib-real-gap').prop('checked', settings.realGap).on('change', function () { settings.realGap = this.checked; saveSettings(); refreshRealPreview(false); });
+    $('#rpgib-real-refresh').on('click', () => refreshRealPreview(true));
+    refreshRealPreview(true);
 }
 
 /* ===================== RE-RENDER CACHED ===================== */
@@ -801,6 +1011,19 @@ jQuery(() => {
         updateContextInjection();
 
         eventSource.on(event_types.CHAT_CHANGED, () => { rerenderAll(); updateContextInjection(); syncWeather(); });
+        // Real mode: the time (and, when due, the weather) is refreshed right before
+        // every reply is generated, so he never answers with a stale clock. The tavern
+        // waits for this; the weather request gives up after a few seconds.
+        if (event_types.GENERATION_STARTED) eventSource.on(event_types.GENERATION_STARTED, async () => {
+            if (!settings.enabled || !isReal()) return;
+            try { await Promise.race([realWeatherLine(true), new Promise(r => setTimeout(r, 4000))]); } catch (e) { }
+            updateContextInjection();
+        });
+        // …and once a minute otherwise, so the injection and the light never lag.
+        setInterval(() => {
+            if (!settings.enabled || !isReal()) return;
+            realWeatherLine(true).then(() => { updateContextInjection(); syncWeather(); if ($('#rpgib-real-preview').is(':visible')) $('#rpgib-real-preview').text(realInjectionText()); }).catch(() => { });
+        }, 60 * 1000);
         syncWeather();
         const reRender = (messageId) => {
             if (!settings.enabled) return;
@@ -834,7 +1057,13 @@ jQuery(() => {
 function syncWeather() {
     try {
         if (!settings.enabled || !settings.wxEnabled) { clearWeather(); return; }
-        applyWeather(rpgSceneLatestData(), {
+        const card = isReal()
+            ? Object.assign({}, rpgSceneLatestData() || {}, {
+                time: nowParts(settings.language).time,
+                weather: realWeatherLineSync() || (rpgSceneLatestData() || {}).weather || '',
+            })
+            : rpgSceneLatestData();
+        applyWeather(card, {
             enabled: true,
             strength: settings.wxStrength,
             motion: settings.wxMotion,
@@ -844,6 +1073,11 @@ function syncWeather() {
     } catch (e) { console.warn('[RPG Scene Card] weather failed', e); }
 }
 
+function realWeatherLineSync() {
+    if (!settings.realWeather || !settings.realPlace) return '';
+    const w = cachedWeather(settings.realPlace, settings.realUnits);
+    return w ? weatherText(w, settings.language, settings.realUnits) : '';
+}
 function rpgSceneLatestData() {
     try {
         const chat = getContext().chat || [];
@@ -860,10 +1094,27 @@ function rpgSceneDayNumber(dateStr) {
     return m ? parseInt(m[1]) : null;
 }
 window.RPG = window.RPG || {};
+/* In real mode the Diary gets today as it is: the device's date and time, the real
+   weather, and a day number that grows by one at local midnight — which is what
+   its "new day → summarise" check compares. */
+function realBridge() {
+    const n = nowParts(settings.language);
+    const d = rpgSceneLatestData() || {};
+    const w = settings.realWeather && settings.realPlace ? cachedWeather(settings.realPlace, settings.realUnits) : null;
+    const label = `${n.date} · ${n.time}`;
+    return {
+        label, timeLabel: label, date: n.date, time: n.time,
+        weather: w ? weatherText(w, settings.language, settings.realUnits) : (d.weather || null),
+        location: d.location || null, day: n.day,
+        characters: Array.isArray(d.characters) ? d.characters : [],
+        level: d.level || null, real: true, raw: d,
+    };
+}
 window.RPG.scene = {
     available: true,
     isEnabled: () => !!settings.enabled,
     get: () => {
+        if (settings.enabled && isReal()) return realBridge();
         const d = rpgSceneLatestData();
         if (!d) return null;
         const label = [d.date, d.time].filter(Boolean).join(' · ') || d.date || d.time || null;

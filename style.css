@@ -115,3 +115,19 @@
 
 /* the whole card dims a little, so it is clear the contents are being replaced */
 .rpgib-box.rpgib-busy { opacity: .6; transition: opacity .2s; }
+
+/* real-time mode: what the character is given, shown as-is */
+.rpg-infobox-settings .rpgib-preview {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .85em;
+    line-height: 1.45;
+    padding: 8px 10px;
+    margin: 4px 0 6px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.15));
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1f26) 70%, transparent);
+    max-height: 220px;
+    overflow: auto;
+}
+.rpg-infobox-settings .rpgib-real-block { margin-top: 6px; }
