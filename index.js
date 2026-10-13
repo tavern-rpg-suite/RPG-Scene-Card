@@ -34,6 +34,7 @@ const defaultSettings = {
     statsCount: 1,
     injectContext: true,
     injectDepth: 0,
+    mapHint: true,      // pass RPG Map's room names to the secondary model
     onlyLast: false,
     language: 'en',
     title: 'Scene Card',
@@ -73,6 +74,7 @@ const I18N = {
         wxThemes: 'Tint by place (castle, tavern, clinic, forest, sea)', wxMotion: 'Animate',
         gen: 'Generation & Context', scan: 'Messages to analyse:', msgs: 'messages', statsScan: 'Previous Scene Cards to consider:', boxes: 'boxes',
         inject: 'Add Scene Card to the main model (inject)', depth: 'Injection depth:',
+        mapHint: 'Give the Scene Card model the room names from RPG Map',
         fields: 'Fields to display',
         f_date: '🗓️ Date & weather', f_time: '⏳ Time', f_loc: '📍 Location',
         f_chars: '👥 Present characters', f_level: '⭐ Level',
@@ -109,6 +111,7 @@ const I18N = {
         wxThemes: 'Подкрашивать по месту (замок, таверна, клиника, лес, море)', wxMotion: 'Анимировать',
         gen: 'Генерация и контекст', scan: 'Сообщений для анализа:', msgs: 'сообщений', statsScan: 'Предыдущих Scene Card учитывать:', boxes: 'боксов',
         inject: 'Добавлять Scene Card в основную модель (инъекция)', depth: 'Глубина вставки:',
+        mapHint: 'Передавать модели Scene Card названия комнат с карты (RPG Map)',
         fields: 'Какие поля показывать',
         f_date: '🗓️ Дата и погода', f_time: '⏳ Время', f_loc: '📍 Локация',
         f_chars: '👥 Присутствующие', f_level: '⭐ Уровень',
@@ -310,6 +313,22 @@ function apiUrl() { return normalizeBase(apiConf().url) || 'https://openrouter.a
 function apiModel() { return apiConf().model || ''; }
 function borrowedFrom() { return apiConf().from; }
 
+/* RPG Map knows which rooms exist. Their names go to the secondary model so that,
+   when the scene is in a place the map already has, the card writes it the map's
+   way — and the map can then follow. The marker's own position is deliberately NOT
+   sent: it is often apart from the scene on purpose (exploring, or simply not moved
+   yet), and a small model told "the marker is in the foyer" drifts to the foyer. */
+function mapHintText() {
+    try {
+        if (settings.mapHint === false || !settings.showLocation) return '';
+        const map = window.RPG && window.RPG.map;
+        if (!map || !map.available || !map.isEnabled()) return '';
+        const rooms = [...new Set((map.listRooms() || []).map(r => r && r.room).filter(Boolean))].slice(0, 60);
+        if (!rooms.length) return '';
+        return `Known places on the map: ${rooms.join('; ')}.\nThe recent messages decide where the scene is. If it is in one of these places, write that place's name exactly as listed in "location" (you may add the wider place after a comma). If it is somewhere else, describe it normally.\n\n`;
+    } catch (e) { return ''; }
+}
+
 async function analyseScene(historyText, prevBoxes) {
     const prevArr = Array.isArray(prevBoxes) ? prevBoxes.filter(Boolean) : (prevBoxes ? [prevBoxes] : []);
     const hasPrev = prevArr.length > 0;
@@ -363,7 +382,7 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
                     model: apiModel(),
                     messages: [
                         { role: 'system', content: systemPrompt },
-                        { role: 'user', content: `${hasPrev ? 'Previous Scene Card' + (prevArr.length > 1 ? 's (oldest to newest, continue from the newest)' : ' (continue from this)') + ':\n' + prevArr.map(b => JSON.stringify(b)).join('\n') + '\n\n' : ''}Recent scene:\n${historyText}\n\nOutput JSON:` }
+                        { role: 'user', content: `${mapHintText()}${hasPrev ? 'Previous Scene Card' + (prevArr.length > 1 ? 's (oldest to newest, continue from the newest)' : ' (continue from this)') + ':\n' + prevArr.map(b => JSON.stringify(b)).join('\n') + '\n\n' : ''}Recent scene:\n${historyText}\n\nOutput JSON:` }
                     ],
                     temperature: settings.temperature,
                     ...(strict ? { response_format: { type: 'json_object' } } : {})
@@ -670,6 +689,11 @@ async function processMessage(messageId, forceUpdate = false) {
         renderInfoBox(messageId, data);
         updateContextInjection();
         syncWeather();
+        // Lets RPG Map (and anyone else) follow the scene without polling. Only the
+        // newest card counts: a regenerated old message must not drag the map back.
+        if (messageId === latestBotIndex()) {
+            try { window.dispatchEvent(new CustomEvent('rpg:scene-updated', { detail: { messageId, data } })); } catch (e) { /* old browser */ }
+        }
     } catch (e) {
         console.error('[RPG Scene Card] failed:', e);
         renderInfoBox(messageId, e.message, false, true);
@@ -784,6 +808,7 @@ function settingsHtml() {
                 <label data-i18n="statsScan"></label><input type="number" id="rpgib-stats" class="text_pole" min="0" max="20" style="width:55px;"><label data-i18n="boxes"></label>
             </div>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-inject-context"> <b data-i18n="inject"></b></label>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-map-hint"> <span data-i18n="mapHint"></span></label>
             <div class="flex-container alignitemscenter flexgap5 margin-b-10 margin-t-10">
                 <label data-i18n="depth"></label><input type="number" id="rpgib-inject-depth" class="text_pole" min="0" max="100" style="width:55px;">
             </div>
@@ -913,6 +938,7 @@ function setupUI() {
     $('#rpgib-scan').val(settings.scanCount).on('change', function () { settings.scanCount = parseInt($(this).val()) || 10; saveSettings(); });
     $('#rpgib-stats').val(settings.statsCount).on('change', function () { settings.statsCount = Math.max(0, parseInt($(this).val()) || 0); saveSettings(); });
     $('#rpgib-inject-context').prop('checked', settings.injectContext).on('change', function () { settings.injectContext = this.checked; saveSettings(); updateContextInjection(); });
+    $('#rpgib-map-hint').prop('checked', settings.mapHint !== false).on('change', function () { settings.mapHint = this.checked; saveSettings(); });
     $('#rpgib-inject-depth').val(settings.injectDepth).on('change', function () { settings.injectDepth = parseInt($(this).val()) || 0; saveSettings(); updateContextInjection(); });
     $('#rpgib-only-last').prop('checked', settings.onlyLast).on('change', function () { settings.onlyLast = this.checked; saveSettings(); rerenderAll(); });
     $('#rpgib-export').on('click', exportSettings);
