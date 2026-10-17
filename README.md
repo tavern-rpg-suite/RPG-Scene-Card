@@ -24,8 +24,33 @@ A compact **scene card** rendered at the **top of every character message** — 
 - ⏳ **Continuity guard** — keeps the date, weather and location steady from message to message; normally only the time nudges forward, unless the scene clearly changes day, place or weather. No random new years or teleports.
 - 💉 **Optional injection** into your main model at an adjustable depth, so the story stays anchored to the same time and place.
 - ✏️ **Fully editable prompt** with a reset button, and **inline-editable** fields on each box.
+- 🧩 **Custom fields** — add your own lines to the card (emoji, label, a hint for the model). Two examples come built in: 🌍 *The Living World* — one slow-burning event in the wider world — and ⭐ *Level*.
 - 🌍 **English / Русский** interface *and* generated output.
 - 💾 Cached per message and restored on reload.
+
+## 🌦️ Weather & Atmosphere
+
+Off by default — **Show weather over the chat** in *Weather & atmosphere*.
+
+The card already knows the weather, the time and the place — this turns them into a living layer over the chat:
+
+- 🌧️ **Weather** — rain, storms with lightning, snow, fog, wind gusts; light or heavy, as the card says.
+- 🌅 **Light** — the colour of dawn, day, dusk and night, from the card's time.
+- 🏰 **Place** — indoors or outdoors from the location (or always one of them), and a tint by place: castle, tavern, clinic, forest, sea, underground. Dust in a sunbeam, embers by a hearth.
+- 🎚️ **Strength** slider and an **Animate** switch.
+
+## 🕰️ Time Mode — In-world or Real
+
+- **In-world** (default) — the model keeps the story's own date and time.
+- **Real (companion)** — the date and time of this device, and the **real weather** for your city (search by name, or *use this device's location*); °C or °F. The character can also be told **how long the pause** before your message was. With no API key the card still shows the real date, time and weather.
+
+Weather data: [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) — free, no key needed.
+
+## 🔗 Works with the suite
+
+- **RPG Diary** — follows the card's day: a new in-game day brings a new diary entry (or a summary, as you set it there).
+- **RPG Map** — the card can be given the map's room names, so the location matches a real room; the map follows the card's location, clock and present characters (*Who is where*, routines, the off-screen chronicle).
+- **RPG Living Scene** — reads who is present from the card.
 
 ## 📦 Install
 
