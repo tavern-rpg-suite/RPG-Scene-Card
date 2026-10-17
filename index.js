@@ -2,6 +2,7 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, setExtensionPrompt, extension_prompt_roles } from '../../../../script.js';
 import { applyWeather, clearWeather } from './weather.js';
 import { weatherText, geocode, placeLabel, getWeather, getWeatherAt, cachedWeather, nowParts, formatGap, localDayNumber } from './realtime.js';
+import { rollMidnight } from './midnight.js';
 
 const MODULE_NAME = 'rpg_info_box';
 const PROMPT_KEY = 'rpg_info_box_injection';
@@ -682,6 +683,9 @@ async function processMessage(messageId, forceUpdate = false) {
             delete data._err;
         } else {
             data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount));
+            // (1.5.5) Saturday 23:55 → 00:05 stayed Saturday: past midnight with the date
+            // standing still, the date moves on by one day (see midnight.js)
+            try { if (data && typeof data === 'object') rollMidnight(findPrevBoxes(messageId, 1)[0], data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
         }
         if (!msg.extra) msg.extra = {};
         msg.extra.rpg_info_box = data;
