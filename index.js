@@ -24,6 +24,21 @@ const DEFAULT_PROMPT_RU =
 - Для персонажей: подходящий эмодзи, имя, короткое видимое физическое состояние и одна заметная деталь поведения. НИКОГДА не включай {{user}} ({{user_name}}). Если важных NPC рядом нет — верни пустой список.
 - Все значения короткие и строго внутриигровые (без мета-разговоров). Продолжай логично от предыдущего Scene Card, если он был.`;
 
+/* The very first card of a story has no earlier card to continue from, and an opening
+   message rarely says the date or the hour. For that one card only, this note is added
+   after the main prompt, with the characters' cards and the scenario to read the era from.
+   The main prompt is not touched; every later card goes exactly as before. */
+const OPENING_PROMPT_EN =
+`OPENING SCENE: this is the very first Scene Card of the story — there is no earlier card to continue from, and the messages may not state the date or the time.
+Work them out from everything given: the characters' descriptions, the scenario, the world and its era, the season, and the time of day the opening implies (light, meals, lamps, what people are doing).
+Choose ONE plausible date — weekday, month, day and a year that fits the era and the setting — and a time span that fits what is happening. If the text names any of it, use exactly that.
+Never leave the date or the time empty. Do not explain the choice.`;
+const OPENING_PROMPT_RU =
+`НАЧАЛО ИСТОРИИ: это самая первая Scene Card — продолжать не от чего, а в сообщениях дата и время могут быть не названы.
+Определи их по всему, что дано: описания персонажей, сценарий, мир и его эпоха, время года и время суток, которое подразумевает начало (свет, трапеза, лампы, чем заняты люди).
+Выбери ОДНУ правдоподобную дату — день недели, месяц, число и год, подходящий эпохе и миру, — и промежуток времени, подходящий происходящему. Если в тексте что-то из этого названо, бери ровно это.
+Никогда не оставляй дату и время пустыми. Не объясняй выбор.`;
+
 const defaultSettings = {
     enabled: false,
     baseUrl: 'https://openrouter.ai/api/v1',
@@ -49,6 +64,9 @@ const defaultSettings = {
     showCharacters: true,
     customFields: [],   // [{ id, emoji, label, hint, enabled }]
     examplesSeeded: false,   // the built-in examples are offered once and never again
+    examplesOffered: null,   // ids of the examples already offered (newer ones are offered once too)
+    opening: true,           // the first card of a story works the date and time out by itself
+    openingPrompt: '',       // '' = the default above, in the card's language
     prompt: DEFAULT_PROMPT_EN,
     // Atmosphere driven by the card's own weather / time / location fields.
     wxEnabled: false,
@@ -80,6 +98,9 @@ const I18N = {
         f_date: '🗓️ Date & weather', f_time: '⏳ Time', f_loc: '📍 Location',
         f_chars: '👥 Present characters', f_level: '⭐ Level',
         titleLbl: 'Box title:', promptLbl: 'Analysis prompt (editable):', promptReset: 'Reset prompt to default',
+        openingOn: 'The first card works out the date and time by itself',
+        openingHint: 'Only the very first card of a chat, with the characters\' cards and the scenario. Every later card follows the prompt above.',
+        openingLbl: 'First-card note (editable):',
         lang: 'Language:', analysing: 'Analysing scene…', err: 'Scene Card error', lvl: 'Level',
         e_key: 'No API key — set one in the extension settings.',
         e_net: 'The browser blocked the request before it reached the provider: a region block (try a VPN), an ad blocker on this tab, an http:// address on an https:// page, or a provider that refuses browser calls.',
@@ -87,7 +108,7 @@ const I18N = {
         e_rate: 'Rate limited (429) — wait a moment and try again.',
         e_404: 'Endpoint not found (404) — check the API URL, it usually ends in /v1.',
         dynPrompt: 'Dynamic prompt (only generate shown fields)',
-        onlyLast: 'Show only on the latest message', regen_lbl: 'Regenerate', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
+        onlyLast: 'Show only on the latest message', regen_lbl: 'Regenerate', retry_lbl: 'Try again', make_lbl: 'Make the Scene Card', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
         customTitle: 'Custom fields', addField: 'Add field',
         ph_emoji: 'emoji', ph_label: 'Label', ph_hint: 'Hint for the model (optional)', remove: 'Remove',
         edit_lbl: 'Edit', save_lbl: 'Save', cancel_lbl: 'Cancel',
@@ -117,6 +138,9 @@ const I18N = {
         f_date: '🗓️ Дата и погода', f_time: '⏳ Время', f_loc: '📍 Локация',
         f_chars: '👥 Присутствующие', f_level: '⭐ Уровень',
         titleLbl: 'Заголовок блока:', promptLbl: 'Промпт анализа (редактируемый):', promptReset: 'Сбросить промпт',
+        openingOn: 'Первая карточка сама определяет дату и время',
+        openingHint: 'Только самая первая карточка чата, по карточкам персонажей и сценарию. Все следующие идут по промпту выше.',
+        openingLbl: 'Заметка для первой карточки (редактируемая):',
         lang: 'Язык:', analysing: 'Анализ сцены…', err: 'Ошибка Scene Card', lvl: 'Уровень',
         e_key: 'Не задан ключ API — впиши его в настройках расширения.',
         e_net: 'Браузер заблокировал запрос до того, как он дошёл до провайдера: блокировка по региону (попробуй VPN), блокировщик рекламы на этой вкладке, адрес http:// на странице https:// или провайдер, который не принимает запросы из браузера.',
@@ -124,7 +148,7 @@ const I18N = {
         e_rate: 'Слишком много запросов (429) — подожди немного.',
         e_404: 'Адрес не найден (404) — проверь URL API, обычно он кончается на /v1.',
         dynPrompt: 'Динамичный промпт (генерировать только показанные поля)',
-        onlyLast: 'Показывать только на последнем сообщении', regen_lbl: 'Перегенерировать', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
+        onlyLast: 'Показывать только на последнем сообщении', regen_lbl: 'Перегенерировать', retry_lbl: 'Повторить', make_lbl: 'Сделать Scene Card', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
         customTitle: 'Свои поля', addField: 'Добавить поле',
         ph_emoji: 'эмодзи', ph_label: 'Название', ph_hint: 'Подсказка модели (необязательно)', remove: 'Удалить',
         edit_lbl: 'Изменить', save_lbl: 'Сохранить', cancel_lbl: 'Отмена',
@@ -165,16 +189,39 @@ const EXAMPLE_FIELDS = [
     {
         id: 'ex_level', emoji: '⭐', label: 'Level',
         hint: "The character's level and progress, as a short line like \"Level 4 — 320/500 XP\". Raise it only after something that earns it: a boss defeated, a long training arc, a decisive victory. Never lower it, never move it every message. Cosmetic — no rules attached."
+    },
+    {
+        id: 'ex_outfit', emoji: '👗', label: 'Outfits',
+        hint: "What each present character is wearing right now, item by item, and its state: removed, loosened, torn, wet, stained. Keep it from the previous card and change it only when the messages show it. Per person, very short: \"Name — items (state)\"; people separated by ';'."
+    },
+    {
+        id: 'ex_places', emoji: '🧍', label: 'Positions',
+        hint: "Where each present character is in the room and how: standing, sitting, lying; by the window, at the door, beside whom; who is touching or holding whom. Per person, very short; people separated by ';'."
+    },
+    {
+        id: 'ex_clues', emoji: '🔍', label: 'Details & clues',
+        hint: "One or two small concrete details an attentive observer would notice in the scene right now: an object out of place, a stain, a smell, a nervous habit, something half-hidden. Only what is physically there — never solve anything or reveal a secret outright. Very short."
+    },
+    {
+        id: 'ex_threads', emoji: '🧵', label: 'Open threads',
+        hint: "The unresolved questions of the story so far — promises, mysteries, unanswered questions, decisions still pending — in one line, separated by ';'. Keep them from the previous card; drop one only when the messages resolve it. Very short."
+    },
+    {
+        id: 'ex_next', emoji: '⏳', label: 'Next event',
+        hint: "The nearest planned or expected event (a meeting, a deadline, a train, a ball) and how long until it, counted from the current date and time, like \"Ball at the Duke's — in 2 days\". Empty if nothing is planned."
     }
 ];
 function seedExampleFields() {
-    if (settings.examplesSeeded) return;
+    // installs from before the list: the first two were offered already
+    if (!Array.isArray(settings.examplesOffered)) settings.examplesOffered = settings.examplesSeeded ? ['ex_world', 'ex_level'] : [];
     settings.examplesSeeded = true;
+    let added = false;
     EXAMPLE_FIELDS.forEach(e => {
-        if (!settings.customFields.some(f => f.id === e.id)) {
-            settings.customFields.push(Object.assign({ enabled: false }, e));
-        }
+        if (settings.examplesOffered.includes(e.id)) return;   // offered once: a deleted one stays deleted
+        settings.examplesOffered.push(e.id);
+        if (!settings.customFields.some(f => f.id === e.id)) { settings.customFields.push(Object.assign({ enabled: false }, e)); added = true; }
     });
+    if (added) saveSettings();
 }
 
 function saveSettings() { extension_settings[MODULE_NAME] = settings; saveSettingsDebounced(); }
@@ -330,6 +377,48 @@ function mapHintText() {
     } catch (e) { return ''; }
 }
 
+/* Who the story is about and where it is set, for the first card only. A long card is
+   taken in RPG Map's condensed form when the Map has one for exactly this text; otherwise
+   whole — never cut. */
+const cardNorm = d => String(d || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+function textHash(x) {
+    let h = 2166136261 >>> 0;
+    const v = String(x || '');
+    for (let i = 0; i < v.length; i++) { h ^= v.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h.toString(36) + ':' + v.length;
+}
+function storyCards() {
+    const ctx = getContext();
+    const chars = ctx.characters || [];
+    let list = [];
+    if (ctx.groupId) {
+        const g = (ctx.groups || []).find(x => x && x.id === ctx.groupId);
+        const muted = new Set((g && g.disabled_members) || []);
+        list = ((g && g.members) || []).filter(a => !muted.has(a)).map(a => chars.find(c => c && c.avatar === a)).filter(Boolean);
+    } else if (ctx.characterId !== undefined && chars[ctx.characterId]) list = [chars[ctx.characterId]];
+    return list;
+}
+function openingContext() {
+    try {
+        const ctx = getContext();
+        const briefs = extension_settings.rpg_map_engine?.overhear?.briefs || {};
+        const parts = [];
+        const scen = new Set();
+        storyCards().forEach(ch => {
+            const text = cardNorm([ch.description, ch.personality].filter(Boolean).join('\n'));
+            const mb = ch.avatar && briefs['card:' + ch.avatar];
+            const use = mb && typeof mb.text === 'string' && mb.text.trim() && mb.stamp === textHash(text) + ':v2' ? mb.text.trim() : text;
+            if (use) parts.push(`${ch.name}: ${use}`);
+            if (ch.scenario && String(ch.scenario).trim()) scen.add(cardNorm(ch.scenario));
+        });
+        // a scenario written for this chat (Chat → Scenario override) wins over the cards'
+        const own = ctx.chatMetadata && typeof ctx.chatMetadata.scenario === 'string' ? ctx.chatMetadata.scenario.trim() : '';
+        const scenario = own || [...scen].join('\n');
+        if (!parts.length && !scenario) return '';
+        return `${parts.length ? 'Characters:\n' + parts.join('\n\n') + '\n\n' : ''}${scenario ? 'Scenario:\n' + scenario + '\n\n' : ''}`;
+    } catch (e) { return ''; }
+}
+
 async function analyseScene(historyText, prevBoxes) {
     const prevArr = Array.isArray(prevBoxes) ? prevBoxes.filter(Boolean) : (prevBoxes ? [prevBoxes] : []);
     const hasPrev = prevArr.length > 0;
@@ -368,7 +457,11 @@ CONTINUITY: a previous Scene Card is provided below. Keep "location" the same un
 
 CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (INCLUDING the year), "weather" and "location" IDENTICAL to the previous one UNLESS the recent messages clearly show a change (a new day passes, travel to another place, the weather explicitly shifts). Normally ONLY "time" moves forward by a little. NEVER invent a new year and do NOT relocate or change the weather without a clear narrative reason.` : ''}`;
 
-    const systemPrompt = macros(settings.prompt || DEFAULT_PROMPT_EN) + formatSpec;
+    // the very first card: its own note, after the main prompt (which stays as it is)
+    const opening = !hasPrev && !real && settings.opening !== false && (settings.showDate || settings.showTime);
+    const openingNote = opening ? '\n\n' + macros(String(settings.openingPrompt || '').trim() || (settings.language === 'ru' ? OPENING_PROMPT_RU : OPENING_PROMPT_EN)) : '';
+    const systemPrompt = macros(settings.prompt || DEFAULT_PROMPT_EN) + formatSpec + openingNote;
+    const storyText = opening ? openingContext() : '';
     const endpointUrl = apiUrl() + '/chat/completions';
 
     // Attempt 2 used to send a byte-identical request, so a refusal caused by the
@@ -383,7 +476,7 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
                     model: apiModel(),
                     messages: [
                         { role: 'system', content: systemPrompt },
-                        { role: 'user', content: `${mapHintText()}${hasPrev ? 'Previous Scene Card' + (prevArr.length > 1 ? 's (oldest to newest, continue from the newest)' : ' (continue from this)') + ':\n' + prevArr.map(b => JSON.stringify(b)).join('\n') + '\n\n' : ''}Recent scene:\n${historyText}\n\nOutput JSON:` }
+                        { role: 'user', content: `${storyText}${mapHintText()}${hasPrev ? 'Previous Scene Card' + (prevArr.length > 1 ? 's (oldest to newest, continue from the newest)' : ' (continue from this)') + ':\n' + prevArr.map(b => JSON.stringify(b)).join('\n') + '\n\n' : ''}Recent scene:\n${historyText}\n\nOutput JSON:` }
                     ],
                     temperature: settings.temperature,
                     ...(strict ? { response_format: { type: 'json_object' } } : {})
@@ -561,7 +654,9 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
         box.className = 'rpgib-box rpgib-error';
         box.innerHTML = `<div class="rpgib-head"><span class="rpgib-title">${escapeHtml(settings.title || 'Scene Card')}</span></div>
             <div class="rpgib-divider"></div>
-            <div class="rpgib-status">⚠️ ${escapeHtml(t('err'))}: ${escapeHtml(explainError(data))}</div>`;
+            <div class="rpgib-status">⚠️ ${escapeHtml(t('err'))}: ${escapeHtml(explainError(data))}</div>
+            <button class="rpgib-retry menu_button"><i class="fa-solid fa-rotate"></i> ${escapeHtml(t('retry_lbl'))}</button>`;
+        box.querySelector('.rpgib-retry')?.addEventListener('click', e => { e.currentTarget.disabled = true; processMessage(messageId, true); });
         return;
     }
 
@@ -648,8 +743,20 @@ async function processMessage(messageId, forceUpdate = false) {
     if (!forceUpdate && msg.extra?.rpg_info_box) {
         renderInfoBox(messageId, msg.extra.rpg_info_box);
         updateContextInjection();
+        syncMenuButtons();
         return;
     }
+    /* The answer comes back seconds later. By then the reply may have been swiped to
+       another variant, regenerated, deleted, or the chat changed — a card written then
+       would land on the wrong text. It is kept only if the message is still the same. */
+    const chatId = ctx.chatId;
+    const swipeAt = msg.swipe_id;
+    const token = {};
+    inflight.set(messageId, token);
+    const stillSame = () => getContext().chatId === chatId && getContext().chat[messageId] === msg && msg.swipe_id === swipeAt && inflight.get(messageId) === token;
+    // nothing on screen yet: say that it is coming (a card being redone keeps its spinning button)
+    if (!msg.extra?.rpg_info_box) renderInfoBox(messageId, null, true);
+    syncMenuButtons();
     try {
         const n = Math.max(1, parseInt(settings.scanCount) || 10);
         const startIdx = Math.max(0, messageId - n + 1);
@@ -687,10 +794,13 @@ async function processMessage(messageId, forceUpdate = false) {
             // standing still, the date moves on by one day (see midnight.js)
             try { if (data && typeof data === 'object') rollMidnight(findPrevBoxes(messageId, 1)[0], data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
         }
+        if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); return; }
+        inflight.delete(messageId);
         if (!msg.extra) msg.extra = {};
         msg.extra.rpg_info_box = data;
         saveChatDebounced();
         renderInfoBox(messageId, data);
+        syncMenuButtons();
         updateContextInjection();
         syncWeather();
         // Lets RPG Map (and anyone else) follow the scene without polling. Only the
@@ -700,8 +810,63 @@ async function processMessage(messageId, forceUpdate = false) {
         }
     } catch (e) {
         console.error('[RPG Scene Card] failed:', e);
-        renderInfoBox(messageId, e.message, false, true);
+        if (!stillSame()) return;
+        inflight.delete(messageId);
+        // a card that was there stays; the error is shown on a message that has none
+        if (msg.extra?.rpg_info_box) { renderInfoBox(messageId, msg.extra.rpg_info_box); window.toastr?.error?.(explainError(e.message), t('err')); }
+        else renderInfoBox(messageId, e.message, false, true);
+        syncMenuButtons();
     }
+}
+
+/* ===================== KEEPING THE CARDS ON SCREEN ===================== */
+const inflight = new Map();   // messageId -> the request now writing its card
+
+/* SillyTavern redraws messages without telling anyone: a swipe that failed and went back,
+   older messages loaded by scrolling up, a stopped reply. The card's data is still in the
+   message, only the box was gone. Every such moment, the boxes are put back where they
+   are missing — drawn from what is saved, no request. */
+function ensureBoxes() {
+    if (!settings.enabled || typeof document.querySelectorAll !== 'function') return;
+    const chat = getContext().chat || [];
+    const last = latestBotIndex();
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => {
+        const id = Number(el.getAttribute('mesid'));
+        const m = chat[id];
+        if (!m || m.is_user || m.is_system) return;
+        if (settings.onlyLast && id !== last) { el.querySelector('.rpgib-box')?.remove(); return; }
+        if (el.querySelector('.rpgib-box')) return;
+        if (inflight.has(id)) renderInfoBox(id, null, true);
+        else if (m.extra?.rpg_info_box) renderInfoBox(id, m.extra.rpg_info_box);
+    });
+}
+/* A reply with no card — its request failed, it was stopped, it came before the card was
+   switched on — gets "Make the Scene Card" in its own message menu. Only there: a reply
+   that has a card already has its own redo button on the card. Nothing is sent by itself. */
+function syncMenuButtons() {
+    if (typeof document.querySelectorAll !== 'function') return;
+    const chat = getContext().chat || [];
+    const last = latestBotIndex();
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => {
+        const id = Number(el.getAttribute('mesid'));
+        const m = chat[id];
+        const bar = el.querySelector('.extraMesButtons');
+        if (!bar) return;
+        let b = bar.querySelector('.rpgib-mes-btn');
+        const want = settings.enabled && m && !m.is_user && !m.is_system && !m.extra?.rpg_info_box && !inflight.has(id) && (!settings.onlyLast || id === last);
+        if (!want) { if (b) b.remove(); return; }
+        if (!b) {
+            b = document.createElement('div');
+            b.className = 'mes_button rpgib-mes-btn fa-solid fa-clipboard-list';
+            bar.prepend(b);
+        }
+        b.title = t('make_lbl');
+    });
+}
+let tidyTimer = 0;
+function tidySoon() {
+    clearTimeout(tidyTimer);
+    tidyTimer = setTimeout(() => { try { ensureBoxes(); syncMenuButtons(); } catch (e) { console.warn('[RPG Scene Card] tidy', e); } }, 150);
 }
 
 /* ===================== INJECTION INTO MAIN MODEL ===================== */
@@ -851,6 +1016,13 @@ function settingsHtml() {
             <hr class="sysHR"><h4>📝 <span data-i18n="promptLbl"></span></h4>
             <textarea id="rpgib-prompt" class="text_pole" rows="7" style="width:100%; resize:vertical;"></textarea>
             <div class="menu_button menu_button_icon" id="rpgib-prompt-reset" style="margin-top:6px;"><i class="fa-solid fa-rotate-left"></i> <span data-i18n="promptReset"></span></div>
+            <label class="checkbox_label" style="margin-top:10px;"><input type="checkbox" id="rpgib-opening"> <b data-i18n="openingOn"></b></label>
+            <div class="rpgib-hint" data-i18n="openingHint"></div>
+            <div id="rpgib-opening-box">
+                <label style="display:block; margin-top:6px;" data-i18n="openingLbl"></label>
+                <textarea id="rpgib-opening-prompt" class="text_pole" rows="5" style="width:100%; resize:vertical;"></textarea>
+                <div class="menu_button menu_button_icon" id="rpgib-opening-reset" style="margin-top:6px;"><i class="fa-solid fa-rotate-left"></i> <span data-i18n="promptReset"></span></div>
+            </div>
             <hr class="sysHR">
             <div class="flex-container flexgap5">
                 <div class="menu_button menu_button_icon" id="rpgib-export"><i class="fa-solid fa-file-export"></i> <span data-i18n="exportBtn"></span></div>
@@ -956,6 +1128,15 @@ function setupUI() {
     $('#rpgib-title').val(settings.title).on('input', function () { settings.title = $(this).val(); saveSettings(); rerenderAll(); });
     $('#rpgib-prompt').val(settings.prompt).on('input', function () { settings.prompt = $(this).val(); saveSettings(); });
     $('#rpgib-prompt-reset').on('click', function () { settings.prompt = settings.language === 'ru' ? DEFAULT_PROMPT_RU : DEFAULT_PROMPT_EN; $('#rpgib-prompt').val(settings.prompt); saveSettings(); });
+
+    const openingDefault = () => settings.language === 'ru' ? OPENING_PROMPT_RU : OPENING_PROMPT_EN;
+    const openingShow = () => { $('#rpgib-opening-box').toggle(settings.opening !== false); $('#rpgib-opening-prompt').val(settings.openingPrompt || openingDefault()); };
+    $('#rpgib-opening').prop('checked', settings.opening !== false).on('change', function () { settings.opening = this.checked; saveSettings(); openingShow(); });
+    // the default is kept as '' so it follows the language; only a real edit is stored
+    $('#rpgib-opening-prompt').on('input', function () { const v = String(this.value); settings.openingPrompt = v.trim() === openingDefault().trim() ? '' : v; saveSettings(); });
+    $('#rpgib-opening-reset').on('click', function () { settings.openingPrompt = ''; saveSettings(); openingShow(); });
+    $('#rpgib-lang').on('change', openingShow);
+    openingShow();
 
     $('#rpgib-add-field').on('click', function () {
         settings.customFields.push({ id: 'cf' + Date.now().toString(36), emoji: '🔹', label: '', hint: '', enabled: true });
@@ -1067,14 +1248,44 @@ jQuery(() => {
         eventSource.on(event_types.MESSAGE_EDITED, reRender);
         if (event_types.MESSAGE_UPDATED) eventSource.on(event_types.MESSAGE_UPDATED, reRender);
 
-        eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
+        eventSource.on(event_types.MESSAGE_RECEIVED, (messageId, type) => {
             const msg = getContext().chat[messageId];
-            if (msg && !msg.is_user && !msg.is_system) setTimeout(() => processMessage(messageId, false), 50);
+            // a fresh variant of a swipe is read anew; anything else keeps a card it already has
+            if (msg && !msg.is_user && !msg.is_system) setTimeout(() => processMessage(messageId, type === 'swipe'), 50);
         });
+        /* SillyTavern announces a swipe BEFORE it writes a new variant: the text then is
+           still empty or the old one. A new variant is left to MESSAGE_RECEIVED, once it
+           is written. A variant that exists keeps its own card (SillyTavern stores it with
+           the variant) — read again only if it never had one. */
         eventSource.on(event_types.MESSAGE_SWIPED, (messageId) => {
             const msg = getContext().chat[messageId];
-            if (msg && !msg.is_user && !msg.is_system) setTimeout(() => processMessage(messageId, true), 50);
+            if (!msg || msg.is_user || msg.is_system) return;
+            inflight.delete(messageId);                       // an answer for the variant left behind is not wanted
+            const fresh = Array.isArray(msg.swipes) && Number(msg.swipe_id) >= msg.swipes.length;
+            if (fresh) {
+                // the card still in the message is the previous variant's (kept with it already)
+                if (msg.extra && msg.extra.rpg_info_box) delete msg.extra.rpg_info_box;
+                removeBox(messageId);
+                tidySoon();
+                return;
+            }
+            setTimeout(() => processMessage(messageId, false), 50);
         });
+        $(document).on('click', '.rpgib-mes-btn', function (e) {
+            e.stopPropagation();
+            const id = Number($(this).closest('.mes').attr('mesid'));
+            if (Number.isFinite(id)) processMessage(id, true);
+        });
+        ['GENERATION_ENDED', 'GENERATION_STOPPED', 'MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_UPDATED', 'MESSAGE_EDITED', 'CHAT_CHANGED']
+            .forEach(k => { if (event_types[k]) eventSource.on(event_types[k], tidySoon); });
+        /* …and when SillyTavern redraws messages with no event at all (a failed swipe going
+           back, a chat redisplayed): whole message rows replaced under #chat. Only the rows
+           themselves are watched, not what is inside them, so the card's own drawing never
+           sets this off. */
+        const chatEl = document.getElementById('chat');
+        if (chatEl && typeof MutationObserver === 'function') {
+            new MutationObserver(list => { if (settings.enabled && list.some(r => r.addedNodes.length)) tidySoon(); }).observe(chatEl, { childList: true });
+        }
     } catch (e) { console.error('[RPG Scene Card] Fatal init error:', e); }
 });
 

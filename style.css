@@ -131,3 +131,5 @@
     overflow: auto;
 }
 .rpg-infobox-settings .rpgib-real-block { margin-top: 6px; }
+/* a failed card: try again right there */
+.rpgib-box .rpgib-retry { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0; padding: 3px 10px; font-size: .85em; width: auto; }
