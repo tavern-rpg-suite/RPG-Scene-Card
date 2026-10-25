@@ -18,7 +18,8 @@
     font-size: 0.94em;
     line-height: 1.5;
     animation: rpgib-in .28s ease-out;
-    backdrop-filter: blur(2px);
+    /* no backdrop blur: on every card of a long chat it made scrolling stutter (14 fps → 60),
+       and at 2 px it was hardly visible behind a background that is 82 % opaque anyway */
 }
 @keyframes rpgib-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 

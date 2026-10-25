@@ -628,13 +628,18 @@ function getBox(messageId) {
     const mesText = messageElement.querySelector('.mes_text');
     if (!mesText) return null;
     const parent = mesText.parentElement;
+    /* The top of the reply is the text — or what stands in for it: Living Scene's "replies by
+       roles" puts its blocks right before the text (and hides the text). The card goes above
+       those; one that is already somewhere above the text is left where it is. */
+    let top = mesText;
+    while (top.previousElementSibling && top.previousElementSibling.classList.contains('rls-parts')) top = top.previousElementSibling;
     let box = parent.querySelector(':scope > .rpgib-box');
     if (!box) {
         box = document.createElement('div');
         box.className = 'rpgib-box';
-        parent.insertBefore(box, mesText);       // TOP, OUTSIDE .mes_text (survives edit mode)
-    } else if (box.nextElementSibling !== mesText) {
-        parent.insertBefore(box, mesText);
+        parent.insertBefore(box, top);           // TOP, OUTSIDE .mes_text (survives edit mode)
+    } else if (box.compareDocumentPosition(top) & 2 /* top comes before the box */) {
+        parent.insertBefore(box, top);           // it slipped below the text: back on top
     }
     return box;
 }
