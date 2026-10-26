@@ -77,12 +77,12 @@
 .rpgib-box .rpgib-head { position: relative; display: flex; align-items: center; justify-content: center; padding: 0 0 8px; }
 .rpgib-box .rpgib-head .rpgib-title { padding: 0; }
 .rpgib-box .rpgib-tools { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
-.rpgib-box .rpgib-editbtn, .rpgib-box .rpgib-regenbtn {
+.rpgib-box .rpgib-editbtn, .rpgib-box .rpgib-regenbtn, .rpgib-box .rpgib-backbtn, .rpgib-box .rpgib-foldbtn {
     width: 20px; height: 20px; border: none; background: transparent;
     color: var(--ib-text); opacity: .22; cursor: pointer;
     display: grid; place-items: center; transition: .15s; font-size: .72em; padding: 0;
 }
-.rpgib-box .rpgib-editbtn:hover, .rpgib-box .rpgib-regenbtn:hover { opacity: .8; }
+.rpgib-box .rpgib-editbtn:hover, .rpgib-box .rpgib-regenbtn:hover, .rpgib-box .rpgib-backbtn:hover, .rpgib-box .rpgib-foldbtn:hover { opacity: .8; }
 
 /* --- edit form --- */
 .rpgib-box .rpgib-editform { display: flex; flex-direction: column; gap: 8px; }
@@ -134,3 +134,12 @@
 .rpg-infobox-settings .rpgib-real-block { margin-top: 6px; }
 /* a failed card: try again right there */
 .rpgib-box .rpgib-retry { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0; padding: 3px 10px; font-size: .85em; width: auto; }
+
+/* an older card folded into one line: title, then date · time · place; a click opens it */
+.mes .rpgib-box.rpgib-folded { padding: 7px 14px; margin: 2px 0 10px; animation: none; }
+.rpgib-box .rpgib-foldhead { justify-content: flex-start; gap: 10px; padding: 0; cursor: pointer; min-width: 0; }
+.rpgib-box .rpgib-foldhead .rpgib-title { flex: none; font-size: .92em; opacity: .85; }
+.rpgib-box .rpgib-foldline { flex: 1; min-width: 0; font-size: .86em; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rpgib-box .rpgib-chev { flex: none; font-size: .7em; opacity: .4; transition: opacity .15s; }
+.rpgib-box .rpgib-foldhead:hover .rpgib-chev, .rpgib-box .rpgib-foldhead:focus-visible .rpgib-chev { opacity: .85; }
+.rpgib-box .rpgib-foldhead:focus-visible { outline: 1px solid var(--ib-accent); outline-offset: 3px; border-radius: 6px; }

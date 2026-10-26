@@ -66,6 +66,7 @@ const defaultSettings = {
     examplesSeeded: false,   // the built-in examples are offered once and never again
     examplesOffered: null,   // ids of the examples already offered (newer ones are offered once too)
     opening: true,           // the first card of a story works the date and time out by itself
+    foldOld: true,           // cards above the newest reply fold into one line (open on a click)
     openingPrompt: '',       // '' = the default above, in the card's language
     prompt: DEFAULT_PROMPT_EN,
     // Atmosphere driven by the card's own weather / time / location fields.
@@ -108,7 +109,7 @@ const I18N = {
         e_rate: 'Rate limited (429) — wait a moment and try again.',
         e_404: 'Endpoint not found (404) — check the API URL, it usually ends in /v1.',
         dynPrompt: 'Dynamic prompt (only generate shown fields)',
-        onlyLast: 'Show only on the latest message', regen_lbl: 'Regenerate', retry_lbl: 'Try again', make_lbl: 'Make the Scene Card', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
+        onlyLast: 'Show only on the latest message', foldOld: 'Fold older cards into one line (open on a click)', back_lbl: 'Bring back the previous card', fold_lbl: 'Fold', regen_lbl: 'Regenerate', retry_lbl: 'Try again', make_lbl: 'Make the Scene Card', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
         customTitle: 'Custom fields', addField: 'Add field',
         ph_emoji: 'emoji', ph_label: 'Label', ph_hint: 'Hint for the model (optional)', remove: 'Remove',
         edit_lbl: 'Edit', save_lbl: 'Save', cancel_lbl: 'Cancel',
@@ -148,7 +149,7 @@ const I18N = {
         e_rate: 'Слишком много запросов (429) — подожди немного.',
         e_404: 'Адрес не найден (404) — проверь URL API, обычно он кончается на /v1.',
         dynPrompt: 'Динамичный промпт (генерировать только показанные поля)',
-        onlyLast: 'Показывать только на последнем сообщении', regen_lbl: 'Перегенерировать', retry_lbl: 'Повторить', make_lbl: 'Сделать Scene Card', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
+        onlyLast: 'Показывать только на последнем сообщении', foldOld: 'Сворачивать старые карточки в строку (открываются по клику)', back_lbl: 'Вернуть прошлую карточку', fold_lbl: 'Свернуть', regen_lbl: 'Перегенерировать', retry_lbl: 'Повторить', make_lbl: 'Сделать Scene Card', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
         customTitle: 'Свои поля', addField: 'Добавить поле',
         ph_emoji: 'эмодзи', ph_label: 'Название', ph_hint: 'Подсказка модели (необязательно)', remove: 'Удалить',
         edit_lbl: 'Изменить', save_lbl: 'Сохранить', cancel_lbl: 'Отмена',
@@ -544,7 +545,20 @@ function readScene(parsed, raw) {
 function rowHtml(emoji, html) {
     return `<div class="rpgib-row"><span class="rpgib-emoji">${emoji}</span><span class="rpgib-text">${html}</span></div>`;
 }
-function boxViewHtml(data) {
+/* A card above the newest reply: one line — title, date, time, place — and nothing else in the
+   page until it is opened. A long chat keeps dozens of cards, and every full one is rows of DOM. */
+function boxFoldedHtml(data) {
+    const bits = [];
+    if (settings.showDate && data.date) bits.push(escapeHtml(data.date));
+    if (settings.showTime && data.time) bits.push(escapeHtml(data.time));
+    if (settings.showLocation && data.location) bits.push('📍 ' + escapeHtml(data.location));
+    return `<div class="rpgib-head rpgib-foldhead" role="button" tabindex="0">
+            <span class="rpgib-title">${escapeHtml(settings.title || 'Scene Card')}</span>
+            <span class="rpgib-foldline">${bits.join(' · ')}</span>
+            <i class="fa-solid fa-chevron-down rpgib-chev"></i>
+        </div>`;
+}
+function boxViewHtml(data, canBack = false, canFold = false) {
     const rows = [];
     if (settings.showDate && (data.date || data.weather)) {
         const parts = [];
@@ -575,8 +589,10 @@ function boxViewHtml(data) {
     return `<div class="rpgib-head">
             <span class="rpgib-title">${escapeHtml(settings.title || 'Scene Card')}</span>
             <span class="rpgib-tools">
+                ${canBack ? `<button class="rpgib-backbtn" title="${escapeHtml(t('back_lbl'))}"><i class="fa-solid fa-rotate-left"></i></button>` : ''}
                 <button class="rpgib-regenbtn" title="${escapeHtml(t('regen_lbl'))}"><i class="fa-solid fa-rotate"></i></button>
                 <button class="rpgib-editbtn" title="${escapeHtml(t('edit_lbl'))}"><i class="fa-solid fa-pen"></i></button>
+                ${canFold ? `<button class="rpgib-foldbtn" title="${escapeHtml(t('fold_lbl'))}"><i class="fa-solid fa-chevron-up"></i></button>` : ''}
             </span>
         </div>
         <div class="rpgib-divider"></div>
@@ -669,7 +685,7 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
     if (editing) {
         box.innerHTML = boxEditHtml(data || {});
         box.querySelector('.rpgib-save')?.addEventListener('click', () => {
-            const d = data || {};
+            const d = JSON.parse(JSON.stringify(data || {}));   // a copy: the card being replaced is kept as it was
             const q = k => box.querySelector(`[data-k="${k}"]`);
             const setv = (k) => { const el = q(k); if (el) d[k] = el.value; };
             ['date', 'weather', 'time', 'location'].forEach(setv);
@@ -678,7 +694,7 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
                 const el = q('cf_' + c.id); if (el) { d.custom = d.custom || {}; d.custom[c.id] = el.value; }
             });
             const msg = getContext().chat[messageId];
-            if (msg) { if (!msg.extra) msg.extra = {}; msg.extra.rpg_info_box = d; saveChatDebounced(); }
+            if (msg) { if (!msg.extra) msg.extra = {}; keepVersion(msg); msg.extra.rpg_info_box = d; saveChatDebounced(); }
             renderInfoBox(messageId, d);
             updateContextInjection();
         });
@@ -686,7 +702,34 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
         return;
     }
 
-    box.innerHTML = boxViewHtml(data || {});
+    // an older card: folded to one line unless opened this session
+    const old = isFoldable(messageId);
+    if (old && !unfolded.has(foldKey(messageId))) {
+        box.classList.add('rpgib-folded');
+        box.innerHTML = boxFoldedHtml(data || {});
+        const open = () => { unfolded.add(foldKey(messageId)); renderInfoBox(messageId, data); };
+        const head = box.querySelector('.rpgib-foldhead');
+        head.addEventListener('click', open);
+        head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+        return;
+    }
+    const msgNow = getContext().chat[messageId];
+    const versions = msgNow && msgNow.extra && Array.isArray(msgNow.extra.rpg_info_box_versions) ? msgNow.extra.rpg_info_box_versions : [];
+    box.innerHTML = boxViewHtml(data || {}, versions.length > 0, old);
+    box.querySelector('.rpgib-foldbtn')?.addEventListener('click', () => { unfolded.delete(foldKey(messageId)); renderInfoBox(messageId, data); });
+    // ↶ the previous card comes back; the one it replaces becomes the previous (pressing again swaps back)
+    box.querySelector('.rpgib-backbtn')?.addEventListener('click', () => {
+        const m = getContext().chat[messageId];
+        const list = m && m.extra && m.extra.rpg_info_box_versions;
+        if (!Array.isArray(list) || !list.length) return;
+        const prev = list.pop();
+        if (m.extra.rpg_info_box) list.push(m.extra.rpg_info_box);
+        m.extra.rpg_info_box = prev;
+        saveChatDebounced();
+        renderInfoBox(messageId, prev);
+        updateContextInjection();
+        if (messageId === latestBotIndex()) { syncWeather(); try { window.dispatchEvent(new CustomEvent('rpg:scene-updated', { detail: { messageId, data: prev } })); } catch (e) { } }
+    });
     box.querySelector('.rpgib-editbtn')?.addEventListener('click', () => renderInfoBox(messageId, data, false, false, true));
     box.querySelector('.rpgib-regenbtn')?.addEventListener('click', async (e) => {
         // Without this the button looks dead: the request takes seconds and nothing on
@@ -802,6 +845,7 @@ async function processMessage(messageId, forceUpdate = false) {
         if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); return; }
         inflight.delete(messageId);
         if (!msg.extra) msg.extra = {};
+        keepVersion(msg);
         msg.extra.rpg_info_box = data;
         saveChatDebounced();
         renderInfoBox(messageId, data);
@@ -826,6 +870,38 @@ async function processMessage(messageId, forceUpdate = false) {
 
 /* ===================== KEEPING THE CARDS ON SCREEN ===================== */
 const inflight = new Map();   // messageId -> the request now writing its card
+
+/* ---- folding and versions ---- */
+const unfolded = new Set();   // cards opened by hand this session: chatId#messageId#swipe
+function foldKey(id) { const m = (getContext().chat || [])[id]; return `${getContext().chatId}#${id}#${m ? (m.swipe_id ?? 0) : 0}`; }
+function isFoldable(id) { return settings.foldOld !== false && !settings.onlyLast && id !== latestBotIndex(); }
+/* The card a redo or an edit replaces is kept with the message (up to three), so ↶ can bring it
+   back. Kept in the message's own extra, next to the card, and gone with the message. */
+const VERSIONS_KEEP = 3;
+function keepVersion(msg) {
+    const cur = msg && msg.extra && msg.extra.rpg_info_box;
+    if (!cur || typeof cur !== 'object') return;
+    const list = Array.isArray(msg.extra.rpg_info_box_versions) ? msg.extra.rpg_info_box_versions : [];
+    if (JSON.stringify(list[list.length - 1]) === JSON.stringify(cur)) return;
+    list.push(JSON.parse(JSON.stringify(cur)));
+    msg.extra.rpg_info_box_versions = list.slice(-VERSIONS_KEEP);
+}
+/* When a new reply becomes the newest, the card that was newest folds; cards opened by hand stay open. */
+let lastNewest = -1;
+function refoldOld() {
+    if (typeof document.querySelectorAll !== 'function') return;
+    const newest = latestBotIndex();
+    if (newest === lastNewest) return;
+    lastNewest = newest;
+    const chat = getContext().chat || [];
+    document.querySelectorAll('#chat .rpgib-box').forEach(b => {
+        const id = Number(b.closest('.mes')?.getAttribute('mesid'));
+        const m = chat[id];
+        if (!m || !m.extra || !m.extra.rpg_info_box || inflight.has(id)) return;
+        const want = isFoldable(id) && !unfolded.has(foldKey(id));
+        if (want !== b.classList.contains('rpgib-folded')) renderInfoBox(id, m.extra.rpg_info_box);
+    });
+}
 
 /* SillyTavern redraws messages without telling anyone: a swipe that failed and went back,
    older messages loaded by scrolling up, a stopped reply. The card's data is still in the
@@ -871,7 +947,7 @@ function syncMenuButtons() {
 let tidyTimer = 0;
 function tidySoon() {
     clearTimeout(tidyTimer);
-    tidyTimer = setTimeout(() => { try { ensureBoxes(); syncMenuButtons(); } catch (e) { console.warn('[RPG Scene Card] tidy', e); } }, 150);
+    tidyTimer = setTimeout(() => { try { ensureBoxes(); syncMenuButtons(); refoldOld(); } catch (e) { console.warn('[RPG Scene Card] tidy', e); } }, 150);
 }
 
 /* ===================== INJECTION INTO MAIN MODEL ===================== */
@@ -987,6 +1063,7 @@ function settingsHtml() {
                 <label data-i18n="depth"></label><input type="number" id="rpgib-inject-depth" class="text_pole" min="0" max="100" style="width:55px;">
             </div>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-only-last"> <span data-i18n="onlyLast"></span></label>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-fold-old"> <span data-i18n="foldOld"></span></label>
             <hr class="sysHR"><h4>🌦️ <span data-i18n="wx"></span></h4>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-wx"> <b data-i18n="wxOn"></b></label>
             <div class="rpgib-hint" data-i18n="wxHint"></div>
@@ -1122,6 +1199,7 @@ function setupUI() {
     $('#rpgib-map-hint').prop('checked', settings.mapHint !== false).on('change', function () { settings.mapHint = this.checked; saveSettings(); });
     $('#rpgib-inject-depth').val(settings.injectDepth).on('change', function () { settings.injectDepth = parseInt($(this).val()) || 0; saveSettings(); updateContextInjection(); });
     $('#rpgib-only-last').prop('checked', settings.onlyLast).on('change', function () { settings.onlyLast = this.checked; saveSettings(); rerenderAll(); });
+    $('#rpgib-fold-old').prop('checked', settings.foldOld !== false).on('change', function () { settings.foldOld = this.checked; saveSettings(); rerenderAll(); });
     $('#rpgib-export').on('click', exportSettings);
     $('#rpgib-import').on('click', () => $('#rpgib-import-file').click());
     $('#rpgib-import-file').on('change', function () { if (this.files && this.files[0]) importSettings(this.files[0]); this.value = ''; });
@@ -1270,6 +1348,7 @@ jQuery(() => {
             if (fresh) {
                 // the card still in the message is the previous variant's (kept with it already)
                 if (msg.extra && msg.extra.rpg_info_box) delete msg.extra.rpg_info_box;
+                if (msg.extra && msg.extra.rpg_info_box_versions) delete msg.extra.rpg_info_box_versions;
                 removeBox(messageId);
                 tidySoon();
                 return;
