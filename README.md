@@ -25,10 +25,14 @@ A compact **scene card** rendered at the **top of every character message** — 
 - ✏️ **Fully editable prompt** with a reset button, and **inline-editable** fields on each box.
 - 🧩 **Custom fields** — add your own lines to the card (emoji, label, a hint for the model). Two examples come built in: 🌍 *The Living World* — one slow-burning event in the wider world — and ⭐ *Level*.
 <img width="495" height="591" alt="Screenshot_4" src="https://github.com/user-attachments/assets/fadec32f-5a6d-428f-b043-44ec043d0554" />
+
 - 🌍 **English / Русский** interface *and* generated output.
 - 💾 Cached per message and restored on reload.
 
 ## 🌦️ Weather & Atmosphere
+
+<img width="475" height="285" alt="Screenshot_5" src="https://github.com/user-attachments/assets/77b56c5e-78a1-491f-991d-11471de0edee" />
+
 
 Off by default — **Show weather over the chat** in *Weather & atmosphere*.
 
