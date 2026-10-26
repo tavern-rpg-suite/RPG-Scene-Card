@@ -12,7 +12,6 @@ A compact **scene card** rendered at the **top of every character message** — 
 
 ## ✨ Features
 
-<img width="460" height="569" alt="Screenshot_2" src="https://github.com/user-attachments/assets/efc5777e-9b20-4741-b906-85629cf170b0" />
 <img width="676" height="220" alt="Screenshot_3" src="https://github.com/user-attachments/assets/51bddc54-36ff-4a44-a972-d41af0c424b8" />
 
 
@@ -25,6 +24,7 @@ A compact **scene card** rendered at the **top of every character message** — 
 - 💉 **Optional injection** into your main model at an adjustable depth, so the story stays anchored to the same time and place.
 - ✏️ **Fully editable prompt** with a reset button, and **inline-editable** fields on each box.
 - 🧩 **Custom fields** — add your own lines to the card (emoji, label, a hint for the model). Two examples come built in: 🌍 *The Living World* — one slow-burning event in the wider world — and ⭐ *Level*.
+<img width="495" height="591" alt="Screenshot_4" src="https://github.com/user-attachments/assets/fadec32f-5a6d-428f-b043-44ec043d0554" />
 - 🌍 **English / Русский** interface *and* generated output.
 - 💾 Cached per message and restored on reload.
 
