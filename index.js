@@ -1149,10 +1149,13 @@ function importSettings(file) {
     reader.onload = () => {
         try {
             const obj = JSON.parse(reader.result);
-            const key = settings.apiKey;                       // keep local key
-            settings = Object.assign({}, defaultSettings, settings, obj);
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('not a settings object');
+            // The connection always stays your own: a shared file must never be able to point
+            // the requests (and the key borrowed from a neighbour) at someone else's server.
+            const conn = { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model };
+            for (const k of ['baseUrl', 'apiKey', 'model', '__proto__', 'constructor', 'prototype']) delete obj[k];
+            settings = Object.assign({}, defaultSettings, settings, obj, conn);
             settings.dynamicPrompt = true;
-            settings.apiKey = key;
             if (!Array.isArray(settings.customFields)) settings.customFields = [];
             saveSettings();
             rebuildSettingsUI();
