@@ -50,6 +50,7 @@ const defaultSettings = {
     statsCount: 1,
     injectContext: true,
     injectDepth: 0,
+    inChat: false,          // off: the card goes to the top of the prompt, as always; on: into the chat at the depth (a local model then re-reads only the end)
     mapHint: true,      // pass RPG Map's room names to the secondary model
     onlyLast: false,
     language: 'en',
@@ -93,7 +94,7 @@ const I18N = {
         wxStrength: 'Strength', wxIndoor: 'Indoors', wxAuto: 'Follow the location', wxOut: 'Always outdoors', wxIn: 'Always indoors',
         wxThemes: 'Tint by place (castle, tavern, clinic, forest, sea)', wxMotion: 'Animate',
         gen: 'Generation & Context', scan: 'Messages to analyse:', msgs: 'messages', statsScan: 'Previous Scene Cards to consider:', boxes: 'boxes',
-        inject: 'Add Scene Card to the main model (inject)', depth: 'Injection depth:',
+        inject: 'Add Scene Card to the main model (inject)', depth: 'Injection depth:', inchat: 'Insert in chat', depth_off: 'Works with "Insert in chat"',
         mapHint: 'Give the Scene Card model the room names from RPG Map',
         fields: 'Fields to display',
         f_date: '🗓️ Date & weather', f_time: '⏳ Time', f_loc: '📍 Location',
@@ -104,6 +105,7 @@ const I18N = {
         openingLbl: 'First-card note (editable):',
         lang: 'Language:', analysing: 'Analysing scene…', err: 'Scene Card error', lvl: 'Level',
         e_key: 'No API key — set one in the extension settings.',
+        stop_lbl: 'Stop', e_stop: 'Stopped.', e_timeout: 'No answer for 3 minutes — try again (a local model may need a moment more).',
         e_net: 'The browser blocked the request before it reached the provider: a region block (try a VPN), an ad blocker on this tab, an http:// address on an https:// page, or a provider that refuses browser calls.',
         e_auth: 'The provider rejected the key (401/403) — check the key and its credit.',
         e_rate: 'Rate limited (429) — wait a moment and try again.',
@@ -133,7 +135,7 @@ const I18N = {
         wxStrength: 'Сила', wxIndoor: 'В помещении', wxAuto: 'По месту сцены', wxOut: 'Всегда на улице', wxIn: 'Всегда внутри',
         wxThemes: 'Подкрашивать по месту (замок, таверна, клиника, лес, море)', wxMotion: 'Анимировать',
         gen: 'Генерация и контекст', scan: 'Сообщений для анализа:', msgs: 'сообщений', statsScan: 'Предыдущих Scene Card учитывать:', boxes: 'боксов',
-        inject: 'Добавлять Scene Card в основную модель (инъекция)', depth: 'Глубина вставки:',
+        inject: 'Добавлять Scene Card в основную модель (инъекция)', depth: 'Глубина вставки:', inchat: 'Вставлять в чат', depth_off: 'Работает с «Вставлять в чат»',
         mapHint: 'Передавать модели Scene Card названия комнат с карты (RPG Map)',
         fields: 'Какие поля показывать',
         f_date: '🗓️ Дата и погода', f_time: '⏳ Время', f_loc: '📍 Локация',
@@ -144,6 +146,7 @@ const I18N = {
         openingLbl: 'Заметка для первой карточки (редактируемая):',
         lang: 'Язык:', analysing: 'Анализ сцены…', err: 'Ошибка Scene Card', lvl: 'Уровень',
         e_key: 'Не задан ключ API — впиши его в настройках расширения.',
+        stop_lbl: 'Остановить', e_stop: 'Остановлено.', e_timeout: 'Нет ответа 3 минуты — попробуй ещё раз (локальной модели может понадобиться чуть больше времени).',
         e_net: 'Браузер заблокировал запрос до того, как он дошёл до провайдера: блокировка по региону (попробуй VPN), блокировщик рекламы на этой вкладке, адрес http:// на странице https:// или провайдер, который не принимает запросы из браузера.',
         e_auth: 'Провайдер отклонил ключ (401/403) — проверь ключ и баланс.',
         e_rate: 'Слишком много запросов (429) — подожди немного.',
@@ -350,6 +353,8 @@ function apiConf() {
    name the handful of things it can actually be. */
 function explainError(e) {
     const m = String(e?.message || e || '');
+    if (/SCENE_STOP/.test(m)) return t('e_stop');
+    if (/SCENE_TIMEOUT/.test(m)) return t('e_timeout');
     if (/Failed to fetch|NetworkError|Load failed|ERR_/i.test(m)) return t('e_net');
     if (/HTTP 401|HTTP 403/.test(m)) return t('e_auth');
     if (/HTTP 429/.test(m)) return t('e_rate');
@@ -420,7 +425,7 @@ function openingContext() {
     } catch (e) { return ''; }
 }
 
-async function analyseScene(historyText, prevBoxes) {
+async function analyseScene(historyText, prevBoxes, signal = null) {
     const prevArr = Array.isArray(prevBoxes) ? prevBoxes.filter(Boolean) : (prevBoxes ? [prevBoxes] : []);
     const hasPrev = prevArr.length > 0;
     if (!apiKey()) throw new Error('API key is not set');
@@ -472,6 +477,7 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
         try {
             const response = await fetch(endpointUrl, {
                 method: 'POST',
+                signal: signal || undefined,
                 headers: { 'Authorization': `Bearer ${apiKey().trim()}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: apiModel(),
@@ -484,6 +490,7 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
                 })
             });
             if (response.status === 429 && i === 0) { await new Promise(r => setTimeout(r, 2000)); continue; }
+            if (signal && signal.aborted) throw new Error(signal.reason === 'stop' ? 'SCENE_STOP' : 'SCENE_TIMEOUT');
             if (!response.ok) {
                 if (i === 0 && strict && [400, 404, 422].includes(response.status)) { strict = false; continue; }
                 let detail = '';
@@ -498,7 +505,11 @@ CONTINUITY (IMPORTANT): a previous Scene Card is provided below. Keep "date" (IN
             let content = (msg.content || '').trim();
             const m = content.match(/\{[\s\S]*\}/);
             return readScene(JSON.parse(m ? m[0] : content), content);
-        } catch (e) { if (i === 1) throw e; }
+        } catch (e) {
+            // stopped by hand or out of time: not tried a second time
+            if (signal && signal.aborted) throw new Error(signal.reason === 'stop' ? 'SCENE_STOP' : 'SCENE_TIMEOUT');
+            if (i === 1) throw e;
+        }
     }
 }
 
@@ -668,7 +679,9 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
         box.className = 'rpgib-box rpgib-loading';
         box.innerHTML = `<div class="rpgib-head"><span class="rpgib-title">${escapeHtml(settings.title || 'Scene Card')}</span></div>
             <div class="rpgib-divider"></div>
-            <div class="rpgib-status"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(t('analysing'))}</div>`;
+            <div class="rpgib-status"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(t('analysing'))}
+                <button class="rpgib-stop menu_button" title="${escapeHtml(t('stop_lbl'))}" aria-label="${escapeHtml(t('stop_lbl'))}"><i class="fa-solid fa-stop"></i> ${escapeHtml(t('stop_lbl'))}</button></div>`;
+        box.querySelector('.rpgib-stop')?.addEventListener('click', () => stopCard(messageId));
         return;
     }
     if (isError) {
@@ -735,15 +748,15 @@ function renderInfoBox(messageId, data, isLoading = false, isError = false, edit
         // Without this the button looks dead: the request takes seconds and nothing on
         // screen says so, so it gets pressed again and again.
         const btn = e.currentTarget;
-        if (btn.classList.contains('rpgib-spinning')) return;   // one at a time
+        if (btn.classList.contains('rpgib-spinning')) { stopCard(messageId); return; }   // pressed again while it spins: stop
         btn.classList.add('rpgib-spinning');
-        btn.disabled = true;
+        btn.title = t('stop_lbl');
         const card = btn.closest('.rpgib-box');
         if (card) card.classList.add('rpgib-busy');
         try { await processMessage(messageId, true); }
         finally {
             // The box is redrawn on success, so this button may be gone by now.
-            if (btn.isConnected) { btn.classList.remove('rpgib-spinning'); btn.disabled = false; }
+            if (btn.isConnected) { btn.classList.remove('rpgib-spinning'); btn.disabled = false; btn.title = t('regen_lbl'); }
             if (card && card.isConnected) card.classList.remove('rpgib-busy');
         }
     });
@@ -801,6 +814,13 @@ async function processMessage(messageId, forceUpdate = false) {
     const swipeAt = msg.swipe_id;
     const token = {};
     inflight.set(messageId, token);
+    /* A request that never answers (a local model stuck, a provider that keeps the line open)
+       used to leave the card spinning for ever, with nothing to press. Now it has a limit, and
+       a Stop button on the card. */
+    const ac = new AbortController();
+    aborters.get(messageId)?.abort('stop');
+    aborters.set(messageId, ac);
+    const limit = setTimeout(() => ac.abort('timeout'), SCENE_LIMIT_MS);
     const stillSame = () => getContext().chatId === chatId && getContext().chat[messageId] === msg && msg.swipe_id === swipeAt && inflight.get(messageId) === token;
     // nothing on screen yet: say that it is coming (a card being redone keeps its spinning button)
     if (!msg.extra?.rpg_info_box) renderInfoBox(messageId, null, true);
@@ -817,7 +837,7 @@ async function processMessage(messageId, forceUpdate = false) {
             const r = await realFields(true);
             let fromModel = {};
             if (needsModel() && apiKey()) {
-                try { fromModel = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount)) || {}; }
+                try { fromModel = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount), ac.signal) || {}; }
                 catch (e) { console.warn('[RPG Scene Card] real mode: model fields skipped —', e); fromModel = { _err: explainError(e) }; }
             }
             data = Object.assign({}, fromModel, r);
@@ -837,7 +857,7 @@ async function processMessage(messageId, forceUpdate = false) {
             }
             delete data._err;
         } else {
-            data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount));
+            data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount), ac.signal);
             // (1.5.5) Saturday 23:55 → 00:05 stayed Saturday: past midnight with the date
             // standing still, the date moves on by one day (see midnight.js)
             try { if (data && typeof data === 'object') rollMidnight(findPrevBoxes(messageId, 1)[0], data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
@@ -862,14 +882,20 @@ async function processMessage(messageId, forceUpdate = false) {
         if (!stillSame()) return;
         inflight.delete(messageId);
         // a card that was there stays; the error is shown on a message that has none
-        if (msg.extra?.rpg_info_box) { renderInfoBox(messageId, msg.extra.rpg_info_box); window.toastr?.error?.(explainError(e.message), t('err')); }
+        if (msg.extra?.rpg_info_box) { renderInfoBox(messageId, msg.extra.rpg_info_box); if (!/SCENE_STOP/.test(String(e.message))) window.toastr?.error?.(explainError(e.message), t('err')); }   // stopped by hand: the old card simply stays
         else renderInfoBox(messageId, e.message, false, true);
         syncMenuButtons();
+    } finally {
+        clearTimeout(limit);
+        if (aborters.get(messageId) === ac) aborters.delete(messageId);
     }
 }
 
 /* ===================== KEEPING THE CARDS ON SCREEN ===================== */
 const inflight = new Map();   // messageId -> the request now writing its card
+const aborters = new Map();   // messageId -> how to stop that request
+const SCENE_LIMIT_MS = 180000; // three minutes: enough for a slow local model, not for ever
+function stopCard(messageId) { const ac = aborters.get(messageId); if (ac) ac.abort('stop'); }
 
 /* ---- folding and versions ---- */
 const unfolded = new Set();   // cards opened by hand this session: chatId#messageId#swipe
@@ -991,10 +1017,12 @@ function realInjectionText() {
     }
     return lines.join('\n');
 }
+// where the card goes: the top of the prompt (as always), or the chat at its depth
+function injPos() { return settings.inChat ? 1 : 2; }
 function updateContextInjection() {
     if (!settings.enabled || !settings.injectContext) { setExtensionPrompt(PROMPT_KEY, '', 0, 0, false); return; }
     const txt = isReal() ? realInjectionText() : latestBoxText();
-    setExtensionPrompt(PROMPT_KEY, txt ? `\n[Scene Card]\n${txt}\n` : '', 2, settings.injectDepth, false, extension_prompt_roles.SYSTEM);
+    setExtensionPrompt(PROMPT_KEY, txt ? `\n[Scene Card]\n${txt}\n` : '', injPos(), settings.injectDepth, false, extension_prompt_roles.SYSTEM);
 }
 
 /* ===================== SETTINGS UI ===================== */
@@ -1062,6 +1090,7 @@ function settingsHtml() {
             <div class="flex-container alignitemscenter flexgap5 margin-b-10 margin-t-10">
                 <label data-i18n="depth"></label><input type="number" id="rpgib-inject-depth" class="text_pole" min="0" max="100" style="width:55px;">
             </div>
+            <label class="checkbox_label"><input type="checkbox" id="rpgib-inchat"> <span data-i18n="inchat"></span></label>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-only-last"> <span data-i18n="onlyLast"></span></label>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-fold-old"> <span data-i18n="foldOld"></span></label>
             <hr class="sysHR"><h4>🌦️ <span data-i18n="wx"></span></h4>
@@ -1118,7 +1147,10 @@ function settingsHtml() {
 function applyI18n(root) {
     root.find('[data-i18n]').each(function () { this.textContent = t(this.getAttribute('data-i18n')); });
     root.find('[data-i18n-ph]').each(function () { this.setAttribute('placeholder', t(this.getAttribute('data-i18n-ph'))); });
+    depthLock();
 }
+// the depth only means something in the chat: at the top of the prompt SillyTavern ignores it
+function depthLock() { $('#rpgib-inject-depth').css('opacity', settings.inChat ? '' : '0.55').attr('title', settings.inChat ? '' : t('depth_off')); }
 function renderCustomList() {
     const box = $('#rpgib-custom-list'); box.empty();
     (settings.customFields || []).forEach((f, idx) => {
@@ -1172,8 +1204,42 @@ function rebuildSettingsUI() {
     $('.rpg-infobox-settings .rpgib-drawer-toggle .inline-drawer-icon').removeClass('down').addClass('up');
 }
 
+
+/* The settings in framed groups, the way RPG Vitals has them: each <h4> heading and what follows it,
+   up to the next heading, go into one frame. Nothing is rebuilt — the same elements are moved, so every
+   id and every handler stays as it was. A nested drawer stands on its own; the old rulers go. */
+function frameSettings(root) {
+    if (!root) return;
+    root.querySelectorAll('.inline-drawer-content').forEach(content => {
+        if (content.dataset.framed) return;
+        content.dataset.framed = '1';
+        let box = null;
+        [...content.children].forEach(el => {
+            if (el.tagName === 'H4') {
+                box = document.createElement('div');
+                box.className = 'tsx-frame';
+                content.insertBefore(box, el);
+                el.classList.add('tsx-framehead');
+                box.appendChild(el);
+                return;
+            }
+            if (el.tagName === 'HR' && el.classList.contains('sysHR')) { el.remove(); return; }
+            // a drawer inside the settings: framed like the rest, still opening and closing
+            if (el.classList.contains('inline-drawer')) { el.classList.add('tsx-subframe'); box = null; return; }
+            // what follows a drawer, before the next heading, is not left loose between frames
+            if (!box && content.querySelector(':scope > .tsx-frame, :scope > .tsx-subframe')) {
+                box = document.createElement('div');
+                box.className = 'tsx-frame tsx-loose';
+                content.insertBefore(box, el);
+            }
+            if (box) box.appendChild(el);
+        });
+    });
+}
+
 function setupUI() {
     $('#extensions_settings2').append(settingsHtml());
+    frameSettings(document.querySelector('.rpg-infobox-settings'));
     const root = $('.rpg-infobox-settings');
     root.find('.rpgib-drawer-toggle').on('click', function () { $('#rpgib-drawer-content').slideToggle(150); $(this).find('.inline-drawer-icon').toggleClass('down up'); });
 
@@ -1201,6 +1267,8 @@ function setupUI() {
     $('#rpgib-inject-context').prop('checked', settings.injectContext).on('change', function () { settings.injectContext = this.checked; saveSettings(); updateContextInjection(); });
     $('#rpgib-map-hint').prop('checked', settings.mapHint !== false).on('change', function () { settings.mapHint = this.checked; saveSettings(); });
     $('#rpgib-inject-depth').val(settings.injectDepth).on('change', function () { settings.injectDepth = parseInt($(this).val()) || 0; saveSettings(); updateContextInjection(); });
+    $('#rpgib-inchat').prop('checked', !!settings.inChat).on('change', function () { settings.inChat = this.checked; saveSettings(); depthLock(); updateContextInjection(); });
+    depthLock();
     $('#rpgib-only-last').prop('checked', settings.onlyLast).on('change', function () { settings.onlyLast = this.checked; saveSettings(); rerenderAll(); });
     $('#rpgib-fold-old').prop('checked', settings.foldOld !== false).on('change', function () { settings.foldOld = this.checked; saveSettings(); rerenderAll(); });
     $('#rpgib-export').on('click', exportSettings);

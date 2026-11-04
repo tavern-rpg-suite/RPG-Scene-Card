@@ -143,3 +143,18 @@
 .rpgib-box .rpgib-chev { flex: none; font-size: .7em; opacity: .4; transition: opacity .15s; }
 .rpgib-box .rpgib-foldhead:hover .rpgib-chev, .rpgib-box .rpgib-foldhead:focus-visible .rpgib-chev { opacity: .85; }
 .rpgib-box .rpgib-foldhead:focus-visible { outline: 1px solid var(--ib-accent); outline-offset: 3px; border-radius: 6px; }
+/* the card still being written can be stopped */
+.rpgib-box .rpgib-stop { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 0 auto; padding: 2px 9px; font-size: .8em; width: auto; font-style: normal; opacity: .9; }
+
+/* settings in framed groups, as in RPG Vitals */
+.rpg-infobox-settings .tsx-frame { margin: 8px 0; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .15)); border-radius: 8px; padding: 8px 10px 10px; background: rgba(0, 0, 0, .12); }
+.rpg-infobox-settings .tsx-frame > h4.tsx-framehead { margin: 0 0 6px; padding: 0; font-size: 1em; font-weight: 700; opacity: .92; border: 0; }
+.rpg-infobox-settings .tsx-frame > *:last-child { margin-bottom: 0; }
+
+/* a drawer inside the settings, framed like the groups around it */
+.rpg-infobox-settings .tsx-subframe { margin: 8px 0; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .15)); border-radius: 8px; background: rgba(0, 0, 0, .12); }
+.rpg-infobox-settings .tsx-subframe > .inline-drawer-header { background: none !important; border: 0 !important; box-shadow: none; padding: 8px 10px !important; margin: 0 !important; min-height: 0; border-radius: 8px; }
+.rpg-infobox-settings .tsx-subframe > .inline-drawer-header b, .rpg-infobox-settings .tsx-subframe > .inline-drawer-header span { font-weight: 700; }
+.rpg-infobox-settings .tsx-subframe > .inline-drawer-header .inline-drawer-icon { font-size: 1em; opacity: .65; }
+.rpg-infobox-settings .tsx-subframe > .inline-drawer-content { padding: 0 10px 10px; }
+.rpg-infobox-settings .tsx-subframe .tsx-frame { background: rgba(0, 0, 0, .08); }
