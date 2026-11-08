@@ -862,7 +862,7 @@ async function processMessage(messageId, forceUpdate = false) {
             // standing still, the date moves on by one day (see midnight.js)
             try { if (data && typeof data === 'object') rollMidnight(findPrevBoxes(messageId, 1)[0], data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
         }
-        if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); return; }
+        if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); settleBox(messageId, token); return; }
         inflight.delete(messageId);
         if (!msg.extra) msg.extra = {};
         keepVersion(msg);
@@ -879,7 +879,7 @@ async function processMessage(messageId, forceUpdate = false) {
         }
     } catch (e) {
         console.error('[RPG Scene Card] failed:', e);
-        if (!stillSame()) return;
+        if (!stillSame()) { settleBox(messageId, token, e); return; }
         inflight.delete(messageId);
         // a card that was there stays; the error is shown on a message that has none
         if (msg.extra?.rpg_info_box) { renderInfoBox(messageId, msg.extra.rpg_info_box); if (!/SCENE_STOP/.test(String(e.message))) window.toastr?.error?.(explainError(e.message), t('err')); }   // stopped by hand: the old card simply stays
@@ -895,7 +895,27 @@ async function processMessage(messageId, forceUpdate = false) {
 const inflight = new Map();   // messageId -> the request now writing its card
 const aborters = new Map();   // messageId -> how to stop that request
 const SCENE_LIMIT_MS = 180000; // three minutes: enough for a slow local model, not for ever
-function stopCard(messageId) { const ac = aborters.get(messageId); if (ac) ac.abort('stop'); }
+/* Stop always ends the wait on screen. A request that had already finished (or whose message
+   changed under it) left the spinner with nothing behind it, and Stop had nothing to stop. */
+function stopCard(messageId) {
+    const ac = aborters.get(messageId);
+    if (ac) ac.abort('stop');
+    setTimeout(() => { if (!aborters.has(messageId)) { const tk = inflight.get(messageId); settleBox(messageId, tk, new Error('SCENE_STOP')); } }, 0);
+}
+/* A run that ends without writing its card (the message changed, it was stopped, it failed late)
+   lets go of the message and puts the box back to what is saved: the old card, or "stopped" with
+   a retry. A newer run for the same message keeps the box as it is. */
+function settleBox(messageId, token, err) {
+    if (token !== undefined && inflight.get(messageId) === token) inflight.delete(messageId);
+    if (inflight.has(messageId)) return;
+    try {
+        const m = (getContext().chat || [])[messageId];
+        if (!m || m.is_user || m.is_system) { removeBox(messageId); return; }
+        if (m.extra && m.extra.rpg_info_box) renderInfoBox(messageId, m.extra.rpg_info_box);
+        else renderInfoBox(messageId, err ? err.message : 'SCENE_STOP', false, true);
+        syncMenuButtons();
+    } catch (e) { console.warn('[RPG Scene Card] settle', e); }
+}
 
 /* ---- folding and versions ---- */
 const unfolded = new Set();   // cards opened by hand this session: chatId#messageId#swipe
