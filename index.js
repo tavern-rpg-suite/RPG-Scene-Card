@@ -82,6 +82,7 @@ const defaultSettings = {
     realWeather: true,
     realUnits: 'metric',   // metric | imperial
     realGap: true,         // tell the character how long the pause before her message was
+    cardWhen: 'after',     // after: the card reads the reply (as always) · before: it is made from your message and goes to the bot with it
 };
 
 /* ===================== i18n ===================== */
@@ -111,6 +112,9 @@ const I18N = {
         e_rate: 'Rate limited (429) — wait a moment and try again.',
         e_404: 'Endpoint not found (404) — check the API URL, it usually ends in /v1.',
         dynPrompt: 'Dynamic prompt (only generate shown fields)',
+        when: 'Make the card', whenAfter: 'After the reply', whenBefore: 'Before the reply',
+        whenHint: 'After: the card describes the reply that was written. Before: the card is made from your message and the scene so far, and goes to the bot together with them — the reply already knows the date, the hour and the place. The reply starts a few seconds later; still one card request per reply.',
+        preWait: 'Scene Card: setting the scene before the reply…',
         onlyLast: 'Show only on the latest message', foldOld: 'Fold older cards into one line (open on a click)', back_lbl: 'Bring back the previous card', fold_lbl: 'Fold', regen_lbl: 'Regenerate', retry_lbl: 'Try again', make_lbl: 'Make the Scene Card', exportBtn: 'Export settings', importBtn: 'Import settings', importErr: 'Import failed: invalid file',
         customTitle: 'Custom fields', addField: 'Add field',
         ph_emoji: 'emoji', ph_label: 'Label', ph_hint: 'Hint for the model (optional)', remove: 'Remove',
@@ -152,6 +156,9 @@ const I18N = {
         e_rate: 'Слишком много запросов (429) — подожди немного.',
         e_404: 'Адрес не найден (404) — проверь URL API, обычно он кончается на /v1.',
         dynPrompt: 'Динамичный промпт (генерировать только показанные поля)',
+        when: 'Когда делать карточку', whenAfter: 'После ответа', whenBefore: 'До ответа',
+        whenHint: 'После ответа: карточка описывает написанный ответ. До ответа: карточка строится по твоему сообщению и сцене до него и уходит боту вместе с ними — ответ уже знает дату, час и место. Ответ начнётся на несколько секунд позже; запрос карточки по-прежнему один на ответ.',
+        preWait: 'Scene Card: готовлю сцену перед ответом…',
         onlyLast: 'Показывать только на последнем сообщении', foldOld: 'Сворачивать старые карточки в строку (открываются по клику)', back_lbl: 'Вернуть прошлую карточку', fold_lbl: 'Свернуть', regen_lbl: 'Перегенерировать', retry_lbl: 'Повторить', make_lbl: 'Сделать Scene Card', exportBtn: 'Экспорт настроек', importBtn: 'Импорт настроек', importErr: 'Ошибка импорта: неверный файл',
         customTitle: 'Свои поля', addField: 'Добавить поле',
         ph_emoji: 'эмодзи', ph_label: 'Название', ph_hint: 'Подсказка модели (необязательно)', remove: 'Удалить',
@@ -789,6 +796,49 @@ function clearOtherBoxes(keepId) {
         if (id !== keepId) b.remove();
     });
 }
+/* The messages the card is read from: up to `n`, ending at `lastIdx` (included). */
+function sceneText(lastIdx, n) {
+    const chat = getContext().chat || [];
+    const startIdx = Math.max(0, lastIdx - n + 1);
+    return chat.slice(startIdx, lastIdx + 1).filter(m => m && !m.is_system).map(m => `${m.name}: ${m.mes}`).join('\n\n');
+}
+/* One card's data: the same request and the same rules, whether it is made after the reply
+   (from the reply) or before it (from the user's message). `own` is the time the message
+   was written, for a real-mode card of an old message. */
+async function buildCardData(historyText, prev, signal, own, lastCard) {
+    let data;
+    if (isReal()) {
+        // The model only fills what the device cannot know, and only if it can be asked.
+        const r = await realFields(true);
+        let fromModel = {};
+        if (needsModel() && apiKey()) {
+            try { fromModel = await analyseScene(historyText, prev, signal) || {}; }
+            catch (e) { console.warn('[RPG Scene Card] real mode: model fields skipped —', e); fromModel = { _err: explainError(e) }; }
+        }
+        data = Object.assign({}, fromModel, r);
+        /* The card is a snapshot of the moment the message was written. A new
+           message is written now; an old one — regenerated, or swiped — keeps
+           its own date and time, and gets the weather as it was THEN, not
+           today's sky under a date two weeks ago. */
+        if (own && Math.abs(Date.now() - own) >= 60 * 60 * 1000) {
+            const n = nowParts(settings.language, new Date(own));
+            data.date = n.date; data.time = n.time; data.day = n.day;
+            data.weather = '';
+            if (settings.realWeather && settings.realPlace) {
+                const past = await getWeatherAt(settings.realPlace, settings.realUnits, own);
+                if (past) data.weather = weatherText(past, settings.language, settings.realUnits);
+            }
+        }
+        delete data._err;
+    } else {
+        data = await analyseScene(historyText, prev, signal);
+        // (1.5.5) Saturday 23:55 → 00:05 stayed Saturday: past midnight with the date
+        // standing still, the date moves on by one day (see midnight.js)
+        try { if (data && typeof data === 'object') rollMidnight(lastCard, data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
+    }
+    return data;
+}
+
 async function processMessage(messageId, forceUpdate = false) {
     if (!settings.enabled) return;
     const ctx = getContext();
@@ -826,41 +876,15 @@ async function processMessage(messageId, forceUpdate = false) {
     if (!msg.extra?.rpg_info_box) renderInfoBox(messageId, null, true);
     syncMenuButtons();
     try {
-        const n = Math.max(1, parseInt(settings.scanCount) || 10);
-        const startIdx = Math.max(0, messageId - n + 1);
-        const slice = chat.slice(startIdx, messageId + 1).filter(m => !m.is_system);
-        const historyText = slice.map(m => `${m.name}: ${m.mes}`).join('\n\n');
-
+        /* "Before the reply": the card was made from the user's message before this reply was
+           written, and the bot answered from it. It becomes this reply's card as it is — no second
+           request. If that run failed or was skipped, the card is made the usual way now. */
+        const pre = takePreCard(messageId);
         let data;
-        if (isReal()) {
-            // The model only fills what the device cannot know, and only if it can be asked.
-            const r = await realFields(true);
-            let fromModel = {};
-            if (needsModel() && apiKey()) {
-                try { fromModel = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount), ac.signal) || {}; }
-                catch (e) { console.warn('[RPG Scene Card] real mode: model fields skipped —', e); fromModel = { _err: explainError(e) }; }
-            }
-            data = Object.assign({}, fromModel, r);
-            /* The card is a snapshot of the moment the message was written. A new
-               message is written now; an old one — regenerated, or swiped — keeps
-               its own date and time, and gets the weather as it was THEN, not
-               today's sky under a date two weeks ago. */
-            const own = messageTime(msg);
-            if (own && Math.abs(Date.now() - own) >= 60 * 60 * 1000) {
-                const n = nowParts(settings.language, new Date(own));
-                data.date = n.date; data.time = n.time; data.day = n.day;
-                data.weather = '';
-                if (settings.realWeather && settings.realPlace) {
-                    const past = await getWeatherAt(settings.realPlace, settings.realUnits, own);
-                    if (past) data.weather = weatherText(past, settings.language, settings.realUnits);
-                }
-            }
-            delete data._err;
-        } else {
-            data = await analyseScene(historyText, findPrevBoxes(messageId, settings.statsCount), ac.signal);
-            // (1.5.5) Saturday 23:55 → 00:05 stayed Saturday: past midnight with the date
-            // standing still, the date moves on by one day (see midnight.js)
-            try { if (data && typeof data === 'object') rollMidnight(findPrevBoxes(messageId, 1)[0], data); } catch (e) { console.warn('[RPG Scene Card] midnight', e); }
+        if (pre) data = pre;
+        else {
+            const n = Math.max(1, parseInt(settings.scanCount) || 10);
+            data = await buildCardData(sceneText(messageId, n), findPrevBoxes(messageId, settings.statsCount), ac.signal, messageTime(msg), findPrevBoxes(messageId, 1)[0]);
         }
         if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); settleBox(messageId, token); return; }
         inflight.delete(messageId);
@@ -996,11 +1020,73 @@ function tidySoon() {
     tidyTimer = setTimeout(() => { try { ensureBoxes(); syncMenuButtons(); refoldOld(); } catch (e) { console.warn('[RPG Scene Card] tidy', e); } }, 150);
 }
 
+/* ===================== "BEFORE THE REPLY" ===================== */
+/* With "Make the card: before the reply" the card is made from the user's message and the scene
+   before it, the moment a reply is asked for, and goes to the bot with that very request — so the
+   reply is written knowing the date, the hour and the place. The tavern waits for it (it waits for
+   every extension at this point); Stop in the tavern stops it too. When the reply arrives, it gets
+   this card as it is: still one card request per reply. */
+const PRE_LIMIT_MS = 90000;   // a reply is not held up longer than this; the card is then made after it
+const PRE_KEEP_MS = 10 * 60 * 1000;
+let preCard = null;           // { chatId, after, at, data } — the card waiting for the reply at index after + 1
+let preRun = null;            // { ac } — the request being made now
+let groupKind = 'normal';     // what the group was asked for (a swipe, or a new turn)
+function wantsPre() { return settings.enabled && settings.cardWhen === 'before'; }
+function livePre() {
+    const p = preCard;
+    if (!p || p.chatId !== getContext().chatId || Date.now() - p.at > PRE_KEEP_MS) return null;
+    return p;
+}
+function takePreCard(messageId) {
+    const p = livePre();
+    if (!p || messageId !== p.after + 1) return null;
+    preCard = null;
+    return p.data;
+}
+/* kind: normal | swipe | regenerate. `typed` is the text still in the box (solo chats: the tavern
+   adds the message to the chat only after this point). */
+async function makePreCard(kind, typed) {
+    if (!wantsPre() || (!isReal() && !apiKey())) return;
+    const ctx = getContext();
+    const chat = ctx.chat || [];
+    let last = chat.length - 1;
+    // a swipe or a regenerate replaces the newest reply: the card is read from what came before it
+    if ((kind === 'swipe' || kind === 'regenerate') && last >= 0 && chat[last] && !chat[last].is_user) last--;
+    let after = last;
+    const n = Math.max(1, parseInt(settings.scanCount) || 10);
+    let text = sceneText(last, typed ? n - 1 : n);
+    if (typed) {
+        after = chat.length;   // the message about to be added
+        text = (text ? text + '\n\n' : '') + `${ctx.name1 || 'User'}: ${typed}`;
+    }
+    if (!text.trim()) return;
+    preRun?.ac.abort('stop');
+    const ac = new AbortController();
+    const run = { ac };
+    preRun = run;
+    const chatId = ctx.chatId;
+    const limit = setTimeout(() => ac.abort('timeout'), PRE_LIMIT_MS);
+    const note = window.toastr?.info?.(t('preWait'), '', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+    try {
+        const data = await buildCardData(text, findPrevBoxes(last + 1, settings.statsCount), ac.signal, 0, findPrevBoxes(last + 1, 1)[0]);
+        if (preRun !== run || getContext().chatId !== chatId || !data || typeof data !== 'object') return;
+        preCard = { chatId, after, at: Date.now(), data };
+        updateContextInjection();
+    } catch (e) {
+        // the reply goes ahead with the newest card as before; its own card is made after it
+        if (!/SCENE_STOP/.test(String(e && e.message))) console.warn('[RPG Scene Card] before the reply: not made —', e);
+    } finally {
+        clearTimeout(limit);
+        if (preRun === run) preRun = null;
+        try { if (note) window.toastr.clear(note); } catch (e) { /* gone */ }
+    }
+}
+
 /* ===================== INJECTION INTO MAIN MODEL ===================== */
-function latestBoxText() {
+function latestBoxText(given) {
     const chat = getContext().chat || [];
-    for (let i = chat.length - 1; i >= 0; i--) {
-        const d = chat[i]?.extra?.rpg_info_box;
+    for (let i = (given ? 1 : chat.length) - 1; i >= 0; i--) {
+        const d = given || chat[i]?.extra?.rpg_info_box;
         if (d) {
             const lines = [];
             if (d.date || d.weather) lines.push(`Date: ${[d.date, d.weather].filter(Boolean).join(' | ')}`);
@@ -1019,7 +1105,7 @@ function latestBoxText() {
 /* Real mode: what the character is told is about NOW, not about when the last card
    was drawn — she may write the next morning. Location and the people present still
    come from the newest card, if the model filled them. */
-function realInjectionText() {
+function realInjectionText(given) {
     const lines = [];
     const n = nowParts(settings.language);
     lines.push(`${tr('r_now')}: ${n.date}, ${n.time}.`);
@@ -1029,7 +1115,7 @@ function realInjectionText() {
         const gap = pauseBeforeLastUserMessage();
         if (gap) lines.push(`${tr('r_gap')}: ${formatGap(gap, settings.language)}.`);
     }
-    const d = rpgSceneLatestData();
+    const d = given || rpgSceneLatestData();
     if (d) {
         if (settings.showLocation && d.location) lines.push(`${t('r_loc')}: ${d.location}`);
         if (settings.showCharacters && Array.isArray(d.characters) && d.characters.length) lines.push(`${t('r_present')}: ` + d.characters.map(c => `${c.name}${c.state ? ' (' + c.state + ')' : ''}`).filter(Boolean).join('; '));
@@ -1039,9 +1125,10 @@ function realInjectionText() {
 }
 // where the card goes: the top of the prompt (as always), or the chat at its depth
 function injPos() { return settings.inChat ? 1 : 2; }
-function updateContextInjection() {
+function updateContextInjection(given) {
     if (!settings.enabled || !settings.injectContext) { setExtensionPrompt(PROMPT_KEY, '', 0, 0, false); return; }
-    const txt = isReal() ? realInjectionText() : latestBoxText();
+    if (!given) given = livePre()?.data;   // a card made for the reply about to be written
+    const txt = isReal() ? realInjectionText(given) : latestBoxText(given);
     setExtensionPrompt(PROMPT_KEY, txt ? `\n[Scene Card]\n${txt}\n` : '', injPos(), settings.injectDepth, false, extension_prompt_roles.SYSTEM);
 }
 
@@ -1106,6 +1193,14 @@ function settingsHtml() {
                 <label data-i18n="statsScan"></label><input type="number" id="rpgib-stats" class="text_pole" min="0" max="20" style="width:55px;"><label data-i18n="boxes"></label>
             </div>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-inject-context"> <b data-i18n="inject"></b></label>
+            <div class="flex-container alignitemscenter flexgap5 margin-t-10">
+                <label style="min-width:120px;" data-i18n="when"></label>
+                <select id="rpgib-when" class="text_pole flex1">
+                    <option value="after" data-i18n="whenAfter"></option>
+                    <option value="before" data-i18n="whenBefore"></option>
+                </select>
+            </div>
+            <div class="rpgib-hint margin-b-10" data-i18n="whenHint"></div>
             <label class="checkbox_label"><input type="checkbox" id="rpgib-map-hint"> <span data-i18n="mapHint"></span></label>
             <div class="flex-container alignitemscenter flexgap5 margin-b-10 margin-t-10">
                 <label data-i18n="depth"></label><input type="number" id="rpgib-inject-depth" class="text_pole" min="0" max="100" style="width:55px;">
@@ -1209,6 +1304,7 @@ function importSettings(file) {
             settings = Object.assign({}, defaultSettings, settings, obj, conn);
             settings.dynamicPrompt = true;
             if (!Array.isArray(settings.customFields)) settings.customFields = [];
+            if (settings.cardWhen !== 'before') settings.cardWhen = 'after';
             saveSettings();
             rebuildSettingsUI();
             updateContextInjection();
@@ -1285,6 +1381,7 @@ function setupUI() {
     $('#rpgib-scan').val(settings.scanCount).on('change', function () { settings.scanCount = parseInt($(this).val()) || 10; saveSettings(); });
     $('#rpgib-stats').val(settings.statsCount).on('change', function () { settings.statsCount = Math.max(0, parseInt($(this).val()) || 0); saveSettings(); });
     $('#rpgib-inject-context').prop('checked', settings.injectContext).on('change', function () { settings.injectContext = this.checked; saveSettings(); updateContextInjection(); });
+    $('#rpgib-when').val(settings.cardWhen === 'before' ? 'before' : 'after').on('change', function () { settings.cardWhen = this.value === 'before' ? 'before' : 'after'; saveSettings(); });
     $('#rpgib-map-hint').prop('checked', settings.mapHint !== false).on('change', function () { settings.mapHint = this.checked; saveSettings(); });
     $('#rpgib-inject-depth').val(settings.injectDepth).on('change', function () { settings.injectDepth = parseInt($(this).val()) || 0; saveSettings(); updateContextInjection(); });
     $('#rpgib-inchat').prop('checked', !!settings.inChat).on('change', function () { settings.inChat = this.checked; saveSettings(); depthLock(); updateContextInjection(); });
@@ -1404,6 +1501,27 @@ jQuery(() => {
             try { await Promise.race([realWeatherLine(true), new Promise(r => setTimeout(r, 4000))]); } catch (e) { }
             updateContextInjection();
         });
+        // "Before the reply": a solo chat is read here (with the line still in the box); a group
+        // only once its user line is in and a member is about to answer
+        if (event_types.GENERATION_STARTED) eventSource.on(event_types.GENERATION_STARTED, async (type, params, dryRun) => {
+            if (!wantsPre() || dryRun) return;
+            const kind = type === 'swipe' || type === 'regenerate' ? type : (type === 'normal' || type === undefined ? 'normal' : '');
+            // a group: only remember what was asked — a quiet or continue run gets no card
+            if (getContext().groupId) { groupKind = kind && !(params && params.quiet_prompt) ? kind : ''; return; }
+            if (!kind || (params && (params.automatic_trigger || params.quiet_prompt))) return;
+            const typed = kind === 'normal' ? String($('#send_textarea').val() || '').trim() : '';
+            if (typed.startsWith('/')) return;              // a slash command, not a message
+            await makePreCard(kind, typed);
+        });
+        if (event_types.GROUP_MEMBER_DRAFTED) eventSource.on(event_types.GROUP_MEMBER_DRAFTED, async () => {
+            if (!wantsPre() || !getContext().groupId) return;
+            const kind = groupKind;
+            if (!kind) return;
+            if (kind !== 'normal') groupKind = 'normal';   // only the first member replaces a swiped reply
+            await makePreCard(kind, '');
+        });
+        if (event_types.GENERATION_STOPPED) eventSource.on(event_types.GENERATION_STOPPED, () => { preRun?.ac.abort('stop'); });
+        eventSource.on(event_types.CHAT_CHANGED, () => { preRun?.ac.abort('stop'); preCard = null; });
         // …and once a minute otherwise, so the injection and the light never lag.
         setInterval(() => {
             if (!settings.enabled || !isReal()) return;
