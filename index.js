@@ -3,6 +3,7 @@ import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, set
 import { applyWeather, clearWeather } from './weather.js';
 import { weatherText, geocode, placeLabel, getWeather, getWeatherAt, cachedWeather, nowParts, formatGap, localDayNumber } from './realtime.js';
 import { rollMidnight } from './midnight.js';
+import './suite-core.js';   // the suite's shared core: one seal for the floating buttons, the request queue, one "when and where"
 
 const MODULE_NAME = 'rpg_info_box';
 const PROMPT_KEY = 'rpg_info_box_injection';
@@ -386,8 +387,39 @@ function mapHintText() {
         if (!map || !map.available || !map.isEnabled()) return '';
         const rooms = [...new Set((map.listRooms() || []).map(r => r && r.room).filter(Boolean))].slice(0, 60);
         if (!rooms.length) return '';
-        return `Known places on the map: ${rooms.join('; ')}.\nThe recent messages decide where the scene is. If it is in one of these places, write that place's name exactly as listed in "location" (you may add the wider place after a comma). If it is somewhere else, describe it normally.\n\n`;
+        const moved = mapMovedRoom();
+        return `Known places on the map: ${rooms.join('; ')}.\nThe recent messages decide where the scene is. If it is in one of these places, write that place's name exactly as listed in "location" (you may add the wider place after a comma). If it is somewhere else, describe it normally.\n`
+            + (moved ? `The player has just moved on the map to: "${moved}". Unless the recent messages clearly show the scene somewhere else, write exactly this in "location".\n` : '')
+            + '\n';
     } catch (e) { return ''; }
+}
+/* The suite's one "where are we" (window.RPG.world): the newer of a move on the Map and the
+   story's last change of place. A room here only when the Map is the newer one and differs
+   from the newest card — i.e. you moved on the map after the story last changed place. */
+function mapMovedRoom() {
+    try {
+        const w = window.RPG && window.RPG.world && window.RPG.world.get ? window.RPG.world.get() : null;
+        const map = window.RPG && window.RPG.map;
+        if (!w || w.from !== 'map' || !w.mapRoom || !map || !map.movedAt || map.movedAt() === null) return '';
+        if (w.sceneLoc && window.RPG.world.samePlace(w.mapRoom, w.sceneLoc)) return '';
+        return w.mapRoom;
+    } catch (e) { return ''; }
+}
+/* The message from which the story has been in its current place: the oldest card of the
+   newest run of cards naming the same place (cards without a place are skipped). */
+function placeSince() {
+    try {
+        const chat = getContext().chat || [];
+        const same = (window.RPG && window.RPG.world && window.RPG.world.samePlace) || ((a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase());
+        let loc = null, since = null;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const d = chat[i] && chat[i].extra && chat[i].extra.rpg_info_box;
+            if (!d || !d.location) continue;
+            if (loc === null) { loc = d.location; since = i; continue; }
+            if (same(d.location, loc)) since = i; else break;
+        }
+        return since;
+    } catch (e) { return null; }
 }
 
 /* Who the story is about and where it is set, for the first card only. A long card is
@@ -871,7 +903,8 @@ async function processMessage(messageId, forceUpdate = false) {
     aborters.get(messageId)?.abort('stop');
     aborters.set(messageId, ac);
     const limit = setTimeout(() => ac.abort('timeout'), SCENE_LIMIT_MS);
-    const stillSame = () => getContext().chatId === chatId && getContext().chat[messageId] === msg && msg.swipe_id === swipeAt && inflight.get(messageId) === token;
+    // (a swipe number that was not set yet and is now 0 is the same variant: the tavern fills it in lazily)
+    const stillSame = () => getContext().chatId === chatId && getContext().chat[messageId] === msg && (msg.swipe_id ?? 0) === (swipeAt ?? 0) && inflight.get(messageId) === token;
     // nothing on screen yet: say that it is coming (a card being redone keeps its spinning button)
     if (!msg.extra?.rpg_info_box) renderInfoBox(messageId, null, true);
     syncMenuButtons();
@@ -886,8 +919,8 @@ async function processMessage(messageId, forceUpdate = false) {
             const n = Math.max(1, parseInt(settings.scanCount) || 10);
             data = await buildCardData(sceneText(messageId, n), findPrevBoxes(messageId, settings.statsCount), ac.signal, messageTime(msg), findPrevBoxes(messageId, 1)[0]);
         }
-        if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped`); settleBox(messageId, token); return; }
-        inflight.delete(messageId);
+        if (!stillSame()) { console.log(`[RPG Scene Card] #${messageId} changed while its card was being written — that card is dropped (${whyDropped(chatId, messageId, msg, swipeAt, token)})`); settleBox(messageId, token); return; }
+        inflight.delete(messageId); stoppedByHand.delete(messageId);
         if (!msg.extra) msg.extra = {};
         keepVersion(msg);
         msg.extra.rpg_info_box = data;
@@ -904,6 +937,8 @@ async function processMessage(messageId, forceUpdate = false) {
     } catch (e) {
         console.error('[RPG Scene Card] failed:', e);
         if (!stillSame()) { settleBox(messageId, token, e); return; }
+        // stopped, but not by Stop on this card (a second run, the tavern, another extension): not an error to show
+        if (/SCENE_STOP/.test(String(e && e.message)) && !stoppedByHand.has(messageId)) { console.log(`[RPG Scene Card] #${messageId}: its run was stopped by something else`); settleBox(messageId, token); return; }
         inflight.delete(messageId);
         // a card that was there stays; the error is shown on a message that has none
         if (msg.extra?.rpg_info_box) { renderInfoBox(messageId, msg.extra.rpg_info_box); if (!/SCENE_STOP/.test(String(e.message))) window.toastr?.error?.(explainError(e.message), t('err')); }   // stopped by hand: the old card simply stays
@@ -921,7 +956,19 @@ const aborters = new Map();   // messageId -> how to stop that request
 const SCENE_LIMIT_MS = 180000; // three minutes: enough for a slow local model, not for ever
 /* Stop always ends the wait on screen. A request that had already finished (or whose message
    changed under it) left the spinner with nothing behind it, and Stop had nothing to stop. */
+const stoppedByHand = new Set();   // messageIds whose Stop was pressed: only they say "Stopped."
+const autoRetried = new WeakSet(); // messages already made again once after a dropped run (no loops)
+const swipedFresh = new Set();     // a new variant is being written: its card comes when it arrives, not before
+function whyDropped(chatId, messageId, msg, swipeAt, token) {
+    const c = getContext();
+    if (c.chatId !== chatId) return 'chat changed';
+    if (c.chat[messageId] !== msg) return 'message replaced or moved';
+    if ((msg.swipe_id ?? 0) !== (swipeAt ?? 0)) return 'swiped';
+    if (inflight.get(messageId) !== token) return inflight.has(messageId) ? 'a newer run' : 'let go';
+    return '?';
+}
 function stopCard(messageId) {
+    stoppedByHand.add(messageId);
     const ac = aborters.get(messageId);
     if (ac) ac.abort('stop');
     setTimeout(() => { if (!aborters.has(messageId)) { const tk = inflight.get(messageId); settleBox(messageId, tk, new Error('SCENE_STOP')); } }, 0);
@@ -929,14 +976,26 @@ function stopCard(messageId) {
 /* A run that ends without writing its card (the message changed, it was stopped, it failed late)
    lets go of the message and puts the box back to what is saved: the old card, or "stopped" with
    a retry. A newer run for the same message keeps the box as it is. */
+/* A run dropped on its own — the message changed under it, a second run took over and then let go, an
+   abort nobody asked for — used to say "Stopped." with a retry, as if Stop had been pressed: it showed up
+   very often and meant nothing. Now only Stop says "Stopped."; the newest reply is simply made again once
+   (for the text it has now), an older one goes back to what it had, or to the "make the card" button. */
 function settleBox(messageId, token, err) {
     if (token !== undefined && inflight.get(messageId) === token) inflight.delete(messageId);
     if (inflight.has(messageId)) return;
     try {
         const m = (getContext().chat || [])[messageId];
         if (!m || m.is_user || m.is_system) { removeBox(messageId); return; }
+        const byHand = stoppedByHand.delete(messageId);
+        const realErr = err && !/SCENE_STOP/.test(String(err.message));
         if (m.extra && m.extra.rpg_info_box) renderInfoBox(messageId, m.extra.rpg_info_box);
-        else renderInfoBox(messageId, err ? err.message : 'SCENE_STOP', false, true);
+        else if (byHand || realErr) renderInfoBox(messageId, err ? err.message : 'SCENE_STOP', false, true);
+        else if (messageId === latestBotIndex() && !autoRetried.has(m) && !swipedFresh.has(messageId) && String(m.mes || '').trim() && settings.enabled) {
+            autoRetried.add(m);
+            console.log(`[RPG Scene Card] #${messageId}: its card run was dropped — made again for the text it has now`);
+            setTimeout(() => { if (!inflight.has(messageId) && getContext().chat[messageId] === m && !m.extra?.rpg_info_box) processMessage(messageId, false); }, 0);
+        }
+        else removeBox(messageId);
         syncMenuButtons();
     } catch (e) { console.warn('[RPG Scene Card] settle', e); }
 }
@@ -1091,7 +1150,7 @@ function latestBoxText(given) {
             const lines = [];
             if (d.date || d.weather) lines.push(`Date: ${[d.date, d.weather].filter(Boolean).join(' | ')}`);
             if (d.time) lines.push(`Time: ${d.time}`);
-            if (d.location) lines.push(`Location: ${d.location}`);
+            if (d.location) lines.push(`Location: ${mapMovedRoom() || d.location}`);
             // The switch was honoured in the prompt, the card, the form and the save —
             // everywhere except here, so unticking it stopped the model being ASKED for
             // characters while old ones kept being sent back to it every turn.
@@ -1117,7 +1176,7 @@ function realInjectionText(given) {
     }
     const d = given || rpgSceneLatestData();
     if (d) {
-        if (settings.showLocation && d.location) lines.push(`${t('r_loc')}: ${d.location}`);
+        if (settings.showLocation && d.location) lines.push(`${t('r_loc')}: ${mapMovedRoom() || d.location}`);
         if (settings.showCharacters && Array.isArray(d.characters) && d.characters.length) lines.push(`${t('r_present')}: ` + d.characters.map(c => `${c.name}${c.state ? ' (' + c.state + ')' : ''}`).filter(Boolean).join('; '));
         if (d.custom) (settings.customFields || []).filter(f => f.enabled && f.id && d.custom[f.id]).forEach(f => lines.push(`${f.label}: ${d.custom[f.id]}`));
     }
@@ -1520,7 +1579,7 @@ jQuery(() => {
             if (kind !== 'normal') groupKind = 'normal';   // only the first member replaces a swiped reply
             await makePreCard(kind, '');
         });
-        if (event_types.GENERATION_STOPPED) eventSource.on(event_types.GENERATION_STOPPED, () => { preRun?.ac.abort('stop'); });
+        if (event_types.GENERATION_STOPPED) eventSource.on(event_types.GENERATION_STOPPED, () => { preRun?.ac.abort('stop'); swipedFresh.clear(); });
         eventSource.on(event_types.CHAT_CHANGED, () => { preRun?.ac.abort('stop'); preCard = null; });
         // …and once a minute otherwise, so the injection and the light never lag.
         setInterval(() => {
@@ -1543,6 +1602,7 @@ jQuery(() => {
         eventSource.on(event_types.MESSAGE_RECEIVED, (messageId, type) => {
             const msg = getContext().chat[messageId];
             // a fresh variant of a swipe is read anew; anything else keeps a card it already has
+            swipedFresh.delete(messageId);
             if (msg && !msg.is_user && !msg.is_system) setTimeout(() => processMessage(messageId, type === 'swipe'), 50);
         });
         /* SillyTavern announces a swipe BEFORE it writes a new variant: the text then is
@@ -1555,6 +1615,7 @@ jQuery(() => {
             inflight.delete(messageId);                       // an answer for the variant left behind is not wanted
             const fresh = Array.isArray(msg.swipes) && Number(msg.swipe_id) >= msg.swipes.length;
             if (fresh) {
+                swipedFresh.add(messageId);
                 // the card still in the message is the previous variant's (kept with it already)
                 if (msg.extra && msg.extra.rpg_info_box) delete msg.extra.rpg_info_box;
                 if (msg.extra && msg.extra.rpg_info_box_versions) delete msg.extra.rpg_info_box_versions;
@@ -1665,5 +1726,7 @@ window.RPG.scene = {
             raw: d
         };
     },
-    getRaw: () => rpgSceneLatestData()
+    getRaw: () => rpgSceneLatestData(),
+    // from which message the story has been in its current place (for window.RPG.world)
+    placeSince: () => placeSince(),
 };
